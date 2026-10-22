@@ -105,12 +105,16 @@ func (s *Server) Routes() http.Handler {
 			writeJSON(w, 400, map[string]string{"error": "empty body"})
 			return
 		}
-		idx, err := s.log.Append(body)
+		idx, dup, err := s.log.AppendOnce(body)
 		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, 201, map[string]any{"index": idx, "leafHash": hex.EncodeToString(hashLeaf(body))})
+		code := 201
+		if dup {
+			code = 200 // same idempotency key as an earlier entry: nothing was written
+		}
+		writeJSON(w, code, map[string]any{"index": idx, "duplicate": dup, "leafHash": hex.EncodeToString(hashLeaf(body))})
 	})
 
 	mux.HandleFunc("GET /head", func(w http.ResponseWriter, r *http.Request) {

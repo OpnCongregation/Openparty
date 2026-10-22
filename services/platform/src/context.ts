@@ -1,14 +1,9 @@
 import type { Db } from "./db.js";
+import type { Outbox } from "./outbox.js";
 import type { KeyStore } from "./crypto.js";
 import type { IdAdapter, IdResult, Sms, TrustLog, Payments } from "./adapters.js";
 import type { Config } from "./framework/types.js";
 import { sha256hex } from "./crypto.js";
-
-export interface PendingJoin {
-  subjectId: string;
-  result: IdResult;
-  expires: number;
-}
 
 export interface Ctx {
   db: Db;
@@ -18,10 +13,18 @@ export interface Ctx {
   idAdapter: IdAdapter;
   sms: Sms;
   payments: Payments;
+  /** The public log itself (the sink). Domain code does not call it directly: it queues events with `events.emit` inside `commit`. */
   log: TrustLog;
+  /** Transactional outbox in front of the log. */
+  events: Outbox;
+  /**
+   * Run `fn` in one database transaction. Write the change and call `ctx.events.emit(tx, ...)` inside it: the event is
+   * committed with the change or not at all. After commit the outbox is flushed so the event reaches the log promptly;
+   * if that fails the background publisher retries, and nothing is lost.
+   */
+  commit<R>(fn: (tx: Db) => Promise<R>): Promise<R>;
   /** Injected so legal deadlines can be tested. */
   clock: () => Date;
-  pending: Map<string, PendingJoin>;
 }
 
 export const DAY = 86_400_000;

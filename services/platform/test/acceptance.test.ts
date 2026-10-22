@@ -1,4 +1,4 @@
-﻿import { loadDefaultConfig } from "../src/framework/config.js";
+import { loadDefaultConfig } from "../src/framework/config.js";
 import { describe, expect, it } from "vitest";
 import { ROLES, approve, can, propose } from "../src/admin.js";
 import { assertNoPersonalData } from "../src/adapters.js";

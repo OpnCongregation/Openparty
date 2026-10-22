@@ -63,14 +63,15 @@ describe("F-01: the USSD webhook does not believe an unauthenticated caller", ()
 
   it("rate limits per phone and per source address", async () => {
     const { ctx } = await setup();
-    const perPhone = buildServer(ctx, { ussd: { secret: SECRET, perPhone: 3, perIp: 1000 } });
+    const perPhone = buildServer(ctx, { ussd: { secret: SECRET, perPhone: 3, perIp: 1000, windowMs: 3_600_000 } });
     const h = { "x-ussd-secret": SECRET };
     const codes: number[] = [];
     for (let i = 0; i < 5; i++) codes.push((await post(perPhone, h, body())).statusCode);
     expect(codes).toEqual([200, 200, 200, 429, 429]);
     expect((await post(perPhone, h, body("+2348000000100"))).statusCode).toBe(200); // other numbers unaffected
 
-    const perIp = buildServer(ctx, { ussd: { secret: SECRET, perIp: 2 } });
+    // Counters are shared through the database now, so the address budget needs a database of its own.
+    const perIp = buildServer((await setup()).ctx, { ussd: { secret: SECRET, perIp: 2, windowMs: 3_600_000 } });
     const wrong: number[] = [];
     for (let i = 0; i < 4; i++) wrong.push((await post(perIp, { "x-ussd-secret": "guess" + i }, body())).statusCode);
     expect(wrong).toEqual([401, 401, 429, 429]); // guessing the secret is throttled
@@ -166,12 +167,17 @@ describe("F-09: dues are collected once and reconcile after failures", () => {
 
   it("charge succeeds but recording fails: it is reported, then recorded exactly once on retry", async () => {
     const { ctx, payments, m } = await member();
-    const real = ctx.db.query.bind(ctx.db);
+    // The ledger insert now runs on a transaction handle, so the fault is injected there.
+    const realTx = ctx.db.tx.bind(ctx.db);
     let down = true;
-    ctx.db.query = (async (sql: string, params?: unknown[]) => {
-      if (down && sql.includes("INSERT INTO finance_ledger")) throw new Error("db down");
-      return real(sql, params);
-    }) as typeof ctx.db.query;
+    ctx.db.tx = ((fn: any) => realTx((tx: any) => {
+      const q = tx.query.bind(tx);
+      tx.query = async (sql: string, params?: unknown[]) => {
+        if (down && sql.includes("INSERT INTO finance_ledger")) throw new Error("db down");
+        return q(sql, params);
+      };
+      return fn(tx);
+    })) as typeof ctx.db.tx;
 
     await expect(finance.collectDues(ctx, m.memberId, m.phone, 20_000, "k-3")).rejects.toThrow("db down");
     expect(payments.charges).toBe(1);

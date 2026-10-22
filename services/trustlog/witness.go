@@ -118,7 +118,7 @@ func (w *Witness) sync() error {
 			if err != nil {
 				return err
 			}
-			w.copy.Append(b)
+			w.copy.AppendAlways(b)
 		}
 	}
 	got, _ := w.copy.RootAt(w.copy.Size())

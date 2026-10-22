@@ -1,5 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Ctx } from "./context.js";
+import type { Db } from "./db.js";
+import type { IdResult } from "./adapters.js";
 import { logRef } from "./context.js";
 import { checkPin, hashPin } from "./crypto.js";
 import { fail } from "./errors.js";
@@ -29,19 +31,30 @@ export async function prepareJoin(ctx: Ctx, phone: string, subjectId: string) {
   if (!result.ageOk) return fail("under_age", "Below the voting age set by the law pack", 422);
   const existing = await ctx.db.query<{ state: string }>("SELECT state FROM members WHERE id_hash=$1", [ctx.keys.lookupHash("id", subjectId)]);
   if (existing.length && existing[0].state !== "resigned") return fail("id_in_use", "This ID already has a membership", 409);
-  ctx.pending.set(phone, { subjectId, result, expires: ctx.clock().getTime() + PENDING_TTL_MS });
+  const phoneHash = ctx.keys.lookupHash("phone", phone);
+  const now = ctx.clock();
+  await ctx.db.query("DELETE FROM pending_joins WHERE expires_at < $1", [now.toISOString()]); // tidy up expired ones
+  await ctx.db.query(
+    `INSERT INTO pending_joins(phone_hash,enc,expires_at) VALUES ($1,$2,$3)
+     ON CONFLICT (phone_hash) DO UPDATE SET enc=EXCLUDED.enc, expires_at=EXCLUDED.expires_at`,
+    [phoneHash, ctx.keys.sealTemp({ subjectId, result }, `pending:${phoneHash}`), new Date(now.getTime() + PENDING_TTL_MS).toISOString()]);
   return { preview: result.preview };
 }
 
 /** Step 2: create the provisional member. One id, one member is enforced by a UNIQUE constraint. */
 export async function confirmJoin(ctx: Ctx, phone: string, visibility: "visible" | "anonymous", pin: string) {
-  const p = ctx.pending.get(phone);
-  if (!p || p.expires < ctx.clock().getTime()) return fail("join_expired", "Start again", 410);
-  if (!PIN_RE.test(pin)) return fail("pin_format", "PIN must be 4 digits");
-  const idHash = ctx.keys.lookupHash("id", p.subjectId);
   const phoneHash = ctx.keys.lookupHash("phone", phone);
-
-  const result = await ctx.db.tx(async (tx) => {
+  const row = await ctx.db.query<{ enc: string; expires_at: Date }>("SELECT enc, expires_at FROM pending_joins WHERE phone_hash=$1", [phoneHash]);
+  if (!row.length || new Date(row[0].expires_at).getTime() < ctx.clock().getTime()) return fail("join_expired", "Start again", 410);
+  if (!PIN_RE.test(pin)) return fail("pin_format", "PIN must be 4 digits");
+  const p = ctx.keys.openTemp<{ subjectId: string; result: IdResult }>(row[0].enc, `pending:${phoneHash}`);
+  const idHash = ctx.keys.lookupHash("id", p.subjectId);
+  const pinHash = await hashPin(pin); // before the transaction: do not hold database locks while scrypt runs
+  const joined = (tx: Db, id: string) => ctx.events.emit(tx, { type: "member.joined", data: { member_ref: logRef(ctx, "member", id) } });
+  const result = await ctx.commit(async (tx) => {
+    // Take the pending join: whichever request deletes the row owns it, so two simultaneous confirmations cannot both proceed.
+    const taken = await tx.query("DELETE FROM pending_joins WHERE phone_hash=$1 RETURNING 1", [phoneHash]);
+    if (!taken.length) return fail("join_expired", "Start again", 410);
     const prior = await tx.query<{ id: string; state: string }>("SELECT id,state FROM members WHERE id_hash=$1", [idHash]);
     const record: Partial<RegisterRecord> = { ...p.result.attributes, national_id: p.subjectId, phone };
     if (prior.length) {
@@ -51,9 +64,10 @@ export async function confirmJoin(ctx: Ctx, phone: string, visibility: "visible"
       await tx.query(
         `UPDATE members SET state='provisional', pin_hash=$2, pin_failures=0, visibility=$3, phone_hash=$4,
          record_enc=$5, activated_at=NULL, activated_by=NULL, ward=NULL WHERE id=$1`,
-        [id, hashPin(pin), visibility, phoneHash, await ctx.keys.encrypt(id, record, tx)],
+        [id, pinHash, visibility, phoneHash, await ctx.keys.encrypt(id, record, tx)],
       );
       const card = (await tx.query<{ card_no: string }>("SELECT card_no FROM members WHERE id=$1", [id]))[0].card_no;
+      await joined(tx, id);
       return { id, card };
     }
     const id = randomUUID();
@@ -62,13 +76,12 @@ export async function confirmJoin(ctx: Ctx, phone: string, visibility: "visible"
     await tx.query(
       `INSERT INTO members(id,id_hash,phone_hash,state,card_no,pin_hash,visibility,record_enc)
        VALUES ($1,$2,$3,'provisional',$4,$5,$6,$7)`,
-      [id, idHash, phoneHash, card, hashPin(pin), visibility, await ctx.keys.encrypt(id, record, tx)],
+      [id, idHash, phoneHash, card, pinHash, visibility, await ctx.keys.encrypt(id, record, tx)],
     );
+    await joined(tx, id);
     return { id, card };
   });
 
-  ctx.pending.delete(phone);
-  await ctx.log.append({ type: "member.joined", data: { member_ref: logRef(ctx, "member", result.id) } });
   await ctx.sms.send(phone, t(ctx, "sms.welcome", result.card));
   return { memberId: result.id, cardNo: result.card };
 }
@@ -98,13 +111,16 @@ export async function activateMember(ctx: Ctx, agent: { id: string; role: string
   const missing = missingRegisterFields(rec, registerFields(ctx));
   if (missing.length) return fail("incomplete_record", `Missing register fields: ${missing.join(", ")}`);
 
-  await ctx.db.query(
-    "UPDATE members SET state='active', ward=$2, record_enc=$3, activated_at=$4, activated_by=$5 WHERE id=$1",
-    [input.memberId, input.ward, await ctx.keys.encrypt(input.memberId, rec), ctx.clock().toISOString(), agent.id],
-  );
-  await ctx.log.append({
-    type: "member.activated",
-    data: { member_ref: logRef(ctx, "member", input.memberId), agent_id: agent.id, ward: input.ward },
+  const enc = await ctx.keys.encrypt(input.memberId, rec);
+  await ctx.commit(async (tx) => {
+    await tx.query(
+      "UPDATE members SET state='active', ward=$2, record_enc=$3, activated_at=$4, activated_by=$5 WHERE id=$1",
+      [input.memberId, input.ward, enc, ctx.clock().toISOString(), agent.id],
+    );
+    await ctx.events.emit(tx, {
+      type: "member.activated",
+      data: { member_ref: logRef(ctx, "member", input.memberId), agent_id: agent.id, ward: input.ward },
+    });
   });
   if (rec.phone) await ctx.sms.send(rec.phone, t(ctx, "sms.active"));
 }
@@ -120,15 +136,17 @@ export async function verifyPin(ctx: Ctx, phone: string, pin: string) {
   // Take an attempt slot atomically BEFORE comparing, so parallel guesses cannot all pass a stale "failures < 5" check.
   const slot = await ctx.db.query("UPDATE members SET pin_failures=pin_failures+1 WHERE id=$1 AND pin_failures < $2 RETURNING id", [m.id, MAX_PIN_FAILURES]);
   if (!slot.length) return fail("pin_locked", "PIN locked; see your ward agent", 423);
-  if (!checkPin(pin, m.pin_hash)) return fail("pin_wrong", "Wrong PIN", 401);
+  if (!(await checkPin(pin, m.pin_hash))) return fail("pin_wrong", "Wrong PIN", 401);
   await ctx.db.query("UPDATE members SET pin_failures=0 WHERE id=$1", [m.id]);
   return { id: m.id, state: m.state, cardNo: m.card_no };
 }
 
 export async function resign(ctx: Ctx, memberId: string) {
-  const r = await ctx.db.query("UPDATE members SET state='resigned' WHERE id=$1 AND state IN ('provisional','active','suspended') RETURNING id", [memberId]);
-  if (!r.length) return fail("bad_state", "Cannot resign", 409);
-  await ctx.log.append({ type: "member.resigned", data: { member_ref: logRef(ctx, "member", memberId) } });
+  await ctx.commit(async (tx) => {
+    const r = await tx.query("UPDATE members SET state='resigned' WHERE id=$1 AND state IN ('provisional','active','suspended') RETURNING id", [memberId]);
+    if (!r.length) return fail("bad_state", "Cannot resign", 409);
+    await ctx.events.emit(tx, { type: "member.resigned", data: { member_ref: logRef(ctx, "member", memberId) } });
+  });
 }
 
 /**
@@ -140,10 +158,10 @@ export async function erase(ctx: Ctx, memberId: string) {
     `SELECT 1 FROM register_members rm JOIN registers r ON r.id=rm.register_id JOIN contests c ON c.id=r.contest_id
      WHERE rm.member_id=$1 AND c.state <> 'closed' LIMIT 1`, [memberId]);
   if (live.length) return fail("legal_hold", "Member is on a live contest register; erasure must wait", 409);
-  await ctx.db.tx(async (tx) => {
+  await ctx.commit(async (tx) => {
     await ctx.keys.shred(memberId, tx);
     await tx.query(
       "UPDATE members SET state='erased', pin_hash=NULL, phone_hash=NULL, id_hash='erased:'||id WHERE id=$1", [memberId]);
+    await ctx.events.emit(tx, { type: "member.erased", data: { member_ref: logRef(ctx, "member", memberId) } });
   });
-  await ctx.log.append({ type: "member.erased", data: { member_ref: logRef(ctx, "member", memberId) } });
 }

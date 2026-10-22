@@ -9,12 +9,14 @@ export async function recordDeployment(ctx: Ctx): Promise<{ changed: boolean; fi
   const c = ctx.config;
   const last = await ctx.db.query<{ fingerprint: string }>("SELECT fingerprint FROM deployment_config ORDER BY id DESC LIMIT 1");
   if (last.length && last[0].fingerprint === c.fingerprint) return { changed: false, fingerprint: c.fingerprint };
-  await ctx.db.query(
-    "INSERT INTO deployment_config(fingerprint,floor_version,pack_id,pack_version,party) VALUES ($1,$2,$3,$4,$5)",
-    [c.fingerprint, c.floor.version, c.pack.id, c.pack.version, c.party.party]);
-  await ctx.log.append({
-    type: "deployment.configured",
-    data: { fingerprint: c.fingerprint, floor_version: c.floor.version, pack_id: c.pack.id, pack_version: c.pack.version, pack_status: c.pack.status, pack_signature: c.pack.signature },
+  await ctx.commit(async (tx) => {
+    await tx.query(
+      "INSERT INTO deployment_config(fingerprint,floor_version,pack_id,pack_version,party) VALUES ($1,$2,$3,$4,$5)",
+      [c.fingerprint, c.floor.version, c.pack.id, c.pack.version, c.party.party]);
+    await ctx.events.emit(tx, {
+      type: "deployment.configured",
+      data: { fingerprint: c.fingerprint, floor_version: c.floor.version, pack_id: c.pack.id, pack_version: c.pack.version, pack_status: c.pack.status, pack_signature: c.pack.signature },
+    });
   });
   return { changed: true, fingerprint: c.fingerprint };
 }

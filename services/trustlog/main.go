@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -46,6 +48,12 @@ func main() {
 	mode := "log"
 	if len(os.Args) > 1 {
 		mode = os.Args[1]
+	}
+	switch mode {
+	case "verify":
+		os.Exit(runVerify(os.Args[2:]))
+	case "repair":
+		os.Exit(runRepair(os.Args[2:]))
 	}
 	addr := env("LISTEN", ":8080")
 	data := env("DATA_DIR", "./data")
@@ -92,6 +100,11 @@ func main() {
 		}
 		fmt.Printf("trustlog log=%s size=%d key=%x\n", addr, l.Size(), priv.Public())
 		s.limiter = newIPLimiter(envInt("RATE_LIMIT_PER_MIN", 600), envInt("RATE_LIMIT_BURST", 120))
+		// Keep the limiter's state across restarts (single log process per data directory; see limits.go).
+		saveLimits := s.limiter.persist(data, 10*time.Second)
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGTERM, os.Interrupt)
+		go func() { <-sig; saveLimits(); os.Exit(0) }()
 		log.Fatal(newHTTPServer(addr, s.Routes()).ListenAndServe())
 	case "witness":
 		w := NewWitness(loadKey(data+"/witness.key"), os.Getenv("LOG_URL"), os.Getenv("LOG_KEY"))

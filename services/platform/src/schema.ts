@@ -121,6 +121,34 @@ CREATE TABLE IF NOT EXISTS payment_attempts (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Transactional outbox for the public log. An event is written in the SAME transaction as the change it describes, then
+-- published to the log in order. 'oid' is the idempotency key the log uses to ignore a repeated publish.
+CREATE TABLE IF NOT EXISTS log_outbox (
+  seq BIGSERIAL PRIMARY KEY,
+  oid TEXT NOT NULL UNIQUE,
+  type TEXT NOT NULL,
+  data TEXT NOT NULL,
+  at TIMESTAMPTZ NOT NULL,
+  published_at TIMESTAMPTZ,
+  attempts INT NOT NULL DEFAULT 0,
+  last_error TEXT
+);
+CREATE INDEX IF NOT EXISTS log_outbox_unpublished ON log_outbox(seq) WHERE published_at IS NULL;
+-- Join confirmation state shared by every platform instance. The payload (an ID-check result with personal data) is
+-- sealed under a one-off data key wrapped by the master key; the row lives for minutes.
+CREATE TABLE IF NOT EXISTS pending_joins (
+  phone_hash TEXT PRIMARY KEY,
+  enc TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL
+);
+-- Request counters shared by every platform instance. UNLOGGED: no write-ahead cost, and losing it in a database crash
+-- only resets counters. Old windows are deleted as new ones are written.
+CREATE UNLOGGED TABLE IF NOT EXISTS rate_limits (
+  key TEXT NOT NULL,
+  window_start BIGINT NOT NULL,
+  n INT NOT NULL,
+  PRIMARY KEY (key, window_start)
+);
 CREATE TABLE IF NOT EXISTS quarantine (
   id BIGSERIAL PRIMARY KEY, reason TEXT NOT NULL, amount_minor BIGINT, external_ref TEXT, at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Ctx } from "./context.js";
 import { handleUssd } from "./ussd.js";
+import { LayeredLimiter, MemoryLimiter, PgLimiter, type Limiter } from "./ratelimit.js";
 
 // The USSD webhook is the one public write path on the platform, and the phone number in it is the only "identity" a
 // feature-phone user has. A gateway request must therefore be proven to come from the gateway before that number is
@@ -16,38 +17,19 @@ export interface UssdOptions {
   /** Register /ussd/sim, an unauthenticated route for the browser simulator. Demo and lab only. */
   sim?: boolean;
   /** Requests per minute. */
+  /** Failed authentications per address per window (also the simulator route's per-address limit). */
   perIp?: number;
+  /** Authenticated gateway requests per address per window: a ceiling against a runaway client, not the user-level throttle. */
+  perGateway?: number;
   perPhone?: number;
   windowMs?: number;
+  /** false = keep counts in this process only (single instance, no database round trip). Default: shared through the database. */
+  shared?: boolean;
 }
 
 const PHONE = /^\+?[1-9]\d{7,14}$/;
 const TEXT = /^[0-9*#]{0,200}$/;
 const SESSION = /^[A-Za-z0-9._-]{1,128}$/;
-
-/** Sliding-window counter held in memory. One platform instance only; a shared store is needed to scale out. */
-export class RateLimiter {
-  private hits = new Map<string, number[]>();
-  constructor(private max: number, private windowMs: number, private now: () => number = Date.now) {}
-  /** True if this request is allowed (and counts it). */
-  take(key: string): boolean {
-    const t = this.now();
-    const recent = (this.hits.get(key) ?? []).filter((x) => t - x < this.windowMs);
-    if (recent.length >= this.max) {
-      this.hits.set(key, recent);
-      return false;
-    }
-    recent.push(t);
-    this.hits.set(key, recent);
-    if (this.hits.size > 50_000) this.sweep(t);
-    return true;
-  }
-  private sweep(t: number) {
-    for (const [k, v] of this.hits) if (!v.length || t - v[v.length - 1] >= this.windowMs) this.hits.delete(k);
-    // Still huge (a flood of distinct keys): drop everything rather than grow without bound.
-    if (this.hits.size > 50_000) this.hits.clear();
-  }
-}
 
 function sameSecret(got: string | undefined, want: string): boolean {
   if (!got) return false;
@@ -71,19 +53,34 @@ function presentedSecret(req: FastifyRequest): string | undefined {
 
 export function registerUssd(app: FastifyInstance, ctx: Ctx, o: UssdOptions) {
   const windowMs = o.windowMs ?? 60_000;
-  const ipLimit = new RateLimiter(o.perIp ?? 120, windowMs);
-  const phoneLimit = new RateLimiter(o.perPhone ?? 30, windowMs);
+  // Counts are shared through the database (all instances, across restarts); a local layer sits in front of it.
+  const make = (scope: string, max: number): Limiter => {
+    const local = new MemoryLimiter(max, windowMs);
+    return o.shared === false ? local : new LayeredLimiter(local, new PgLimiter(ctx.db, scope, max, windowMs));
+  };
+  // Real traffic arrives from the aggregator's few addresses, so a per-address limit cannot be the main throttle for it: that
+  // would cap the whole country. Per address we limit (a) FAILED authentication, which is what stops secret guessing, (b) the
+  // unauthenticated simulator route, and (c) the gateway at a high ceiling that only a runaway client would reach. The real
+  // per-user control is per phone number.
+  const failLimit = make("ussd-authfail", o.perIp ?? 20);
+  const simLimit = make("ussd-sim", o.perIp ?? 120);
+  const gatewayLimit = make("ussd-gateway", o.perGateway ?? 6000);
+  const phoneLimit = make("ussd-phone", o.perPhone ?? 30);
   // An empty list means "no allowlist", not "nobody": an unset environment variable must not lock the gateway out.
   const ips = o.allowedIps?.length ? o.allowedIps.map((x) => x.replace(/^::ffff:/, "")) : undefined;
 
   const tooMany = (reply: FastifyReply) => reply.code(429).header("Retry-After", Math.ceil(windowMs / 1000)).send({ error: "rate_limited" });
 
-  const throttleIp = async (req: FastifyRequest, reply: FastifyReply) => {
-    if (!ipLimit.take(req.ip)) return tooMany(reply);
+  const throttleSim = async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!(await simLimit.take(req.ip))) return tooMany(reply);
   };
   const authenticate = async (req: FastifyRequest, reply: FastifyReply) => {
-    if (ips && !ips.includes(req.ip.replace(/^::ffff:/, ""))) return reply.code(403).send({ error: "forbidden" });
-    if (!sameSecret(presentedSecret(req), o.secret!)) return reply.code(401).send({ error: "unauthorized" });
+    const wrongPlace = ips && !ips.includes(req.ip.replace(/^::ffff:/, ""));
+    if (wrongPlace || !sameSecret(presentedSecret(req), o.secret!)) {
+      if (!(await failLimit.take(req.ip))) return tooMany(reply); // too many wrong attempts from this address
+      return wrongPlace ? reply.code(403).send({ error: "forbidden" }) : reply.code(401).send({ error: "unauthorized" });
+    }
+    if (!(await gatewayLimit.take(req.ip))) return tooMany(reply);
   };
 
   const handler = async (req: FastifyRequest, reply: FastifyReply) => {
@@ -94,11 +91,11 @@ export function registerUssd(app: FastifyInstance, ctx: Ctx, o: UssdOptions) {
     if (typeof phone !== "string" || !PHONE.test(phone) || typeof text !== "string" || !TEXT.test(text)
       || (session !== undefined && (typeof session !== "string" || !SESSION.test(session))))
       return reply.code(400).send({ error: "bad_request" });
-    if (!phoneLimit.take(phone)) return tooMany(reply);
+    if (!(await phoneLimit.take(phone))) return tooMany(reply);
     reply.type("text/plain");
     return handleUssd(ctx, phone, text, typeof session === "string" ? session : undefined);
   };
 
-  if (o.secret) app.post("/ussd", { onRequest: [throttleIp, authenticate] }, handler);
-  if (o.sim) app.post("/ussd/sim", { onRequest: [throttleIp] }, handler);
+  if (o.secret) app.post("/ussd", { onRequest: [authenticate] }, handler);
+  if (o.sim) app.post("/ussd/sim", { onRequest: [throttleSim] }, handler);
 }

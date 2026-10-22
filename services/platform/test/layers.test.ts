@@ -1,4 +1,4 @@
-﻿import { PGlite } from "@electric-sql/pglite";
+import { PGlite } from "@electric-sql/pglite";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SimPayments, MemoryTrustLog, SimSms } from "../src/adapters.js";

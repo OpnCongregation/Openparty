@@ -1,7 +1,8 @@
-﻿import type { Ctx } from "./context.js";
+import type { Ctx } from "./context.js";
 import { logRef } from "./context.js";
 import type { IncomingPayment } from "./adapters.js";
 import { getRule } from "./contests.js";
+import type { Db } from "./db.js";
 import { DomainError, fail } from "./errors.js";
 
 export interface Donor {
@@ -15,24 +16,24 @@ async function rejectForeign(ctx: Ctx, p: IncomingPayment) {
   const okCurrency = ctx.config.get<string[]>("finance.accepted_currency");
   const okCountry = ctx.config.get<string[]>("finance.accepted_country");
   if (okCurrency.includes(p.currency) && okCountry.includes(p.country)) return;
-  await ctx.db.query("INSERT INTO quarantine(reason,amount_minor,external_ref) VALUES ('foreign_funds',$1,$2)", [p.amountMinor, p.ref]);
-  await ctx.log.append({ type: "finance.quarantined", data: { reason: "foreign_funds", amount_minor: p.amountMinor } });
+  // Quarantine and its public event commit together; the refusal is raised only after that commit.
+  await ctx.commit(async (tx) => {
+    await tx.query("INSERT INTO quarantine(reason,amount_minor,external_ref) VALUES ('foreign_funds',$1,$2)", [p.amountMinor, p.ref]);
+    await ctx.events.emit(tx, { type: "finance.quarantined", data: { reason: "foreign_funds", amount_minor: p.amountMinor } });
+  });
   return fail("foreign_funds", "Foreign funds are not accepted; quarantined for reporting to the regulator", 422);
 }
 
-async function insertLedger(ctx: Ctx, row: {
+async function insertLedger(ctx: Ctx, db: Db, row: {
   kind: "dues" | "gift"; amountMinor: number; memberId?: string; donorKey?: string; donorEnc?: string; ref: string;
 }) {
-  try {
-    const r = await ctx.db.query<{ id: number }>(
-      `INSERT INTO finance_ledger(kind,amount_minor,member_id,donor_key,donor_enc,external_ref,occurred_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id::int AS id`,
-      [row.kind, row.amountMinor, row.memberId ?? null, row.donorKey ?? null, row.donorEnc ?? null, row.ref, ctx.clock().toISOString()]);
-    return r[0].id;
-  } catch (e: any) {
-    if (String(e.message).includes("external_ref")) return fail("duplicate_payment", "Payment already recorded", 409);
-    throw e;
-  }
+  // ON CONFLICT instead of catching the unique violation: inside a transaction a failed statement would poison it.
+  const r = await db.query<{ id: number }>(
+    `INSERT INTO finance_ledger(kind,amount_minor,member_id,donor_key,donor_enc,external_ref,occurred_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (external_ref) DO NOTHING RETURNING id::int AS id`,
+    [row.kind, row.amountMinor, row.memberId ?? null, row.donorKey ?? null, row.donorEnc ?? null, row.ref, ctx.clock().toISOString()]);
+  if (!r.length) return fail("duplicate_payment", "Payment already recorded", 409);
+  return r[0].id;
 }
 
 /** Rules that can be checked before any money moves. */
@@ -43,18 +44,23 @@ async function checkDuesAllowed(ctx: Ctx, memberId: string, amountMinor: number)
   if (amountMinor < min) return fail("dues_too_low", `Minimum dues is ${min} ${ctx.config.pack.currency.minor_unit}`, 422);
 }
 
-export async function recordDues(ctx: Ctx, memberId: string, p: IncomingPayment) {
+/** `inSameTx` runs inside the transaction that writes the ledger row, so a caller's own bookkeeping commits with it. */
+export async function recordDues(ctx: Ctx, memberId: string, p: IncomingPayment, inSameTx?: (tx: Db, ledgerId: number) => Promise<unknown>) {
   await rejectForeign(ctx, p);
   await checkDuesAllowed(ctx, memberId, p.amountMinor);
-  const id = await insertLedger(ctx, { kind: "dues", amountMinor: p.amountMinor, memberId, ref: p.ref });
-  await ctx.log.append({ type: "finance.dues", data: { ledger_id: id, amount_minor: p.amountMinor, member_ref: logRef(ctx, "member", memberId) } });
+  const id = await ctx.commit(async (tx) => {
+    const id = await insertLedger(ctx, tx, { kind: "dues", amountMinor: p.amountMinor, memberId, ref: p.ref });
+    await ctx.events.emit(tx, { type: "finance.dues", data: { ledger_id: id, amount_minor: p.amountMinor, member_ref: logRef(ctx, "member", memberId) } });
+    await inSameTx?.(tx, id);
+    return id;
+  });
   return { ledgerId: id };
 }
 
 interface Attempt { key: string; member_id: string; amount_minor: number; state: string; ref: string | null; currency: string | null; country: string | null; ledger_id: number | null; error: string | null }
 
-const setAttempt = (ctx: Ctx, key: string, state: string, extra: { ref?: string; currency?: string; country?: string; ledgerId?: number; error?: string | null } = {}) =>
-  ctx.db.query(
+const setAttempt = (db: Db, key: string, state: string, extra: { ref?: string; currency?: string; country?: string; ledgerId?: number; error?: string | null } = {}) =>
+  db.query(
     `UPDATE payment_attempts SET state=$2, ref=COALESCE($3,ref), currency=COALESCE($4,currency), country=COALESCE($5,country),
        ledger_id=COALESCE($6,ledger_id), error=$7, updated_at=now() WHERE key=$1`,
     [key, state, extra.ref ?? null, extra.currency ?? null, extra.country ?? null, extra.ledgerId ?? null, extra.error ?? null]);
@@ -62,20 +68,18 @@ const setAttempt = (ctx: Ctx, key: string, state: string, extra: { ref?: string;
 /** Record a confirmed payment and move its attempt to its final state. Safe to repeat: the ledger's external_ref is unique. */
 async function settle(ctx: Ctx, a: Pick<Attempt, "key" | "member_id">, p: IncomingPayment): Promise<{ ledgerId: number }> {
   try {
-    const r = await recordDues(ctx, a.member_id, p);
-    await setAttempt(ctx, a.key, "recorded", { ledgerId: r.ledgerId });
-    return r;
+    return await recordDues(ctx, a.member_id, p, (tx, ledgerId) => setAttempt(tx, a.key, "recorded", { ledgerId }));
   } catch (e: any) {
     if (e instanceof DomainError && e.code === "duplicate_payment") {
       // A previous run recorded it but died before updating the attempt: adopt the existing ledger row.
       const row = await ctx.db.query<{ id: number }>("SELECT id::int AS id FROM finance_ledger WHERE external_ref=$1", [p.ref]);
       if (row.length) {
-        await setAttempt(ctx, a.key, "recorded", { ledgerId: row[0].id });
+        await setAttempt(ctx.db, a.key, "recorded", { ledgerId: row[0].id });
         return { ledgerId: row[0].id };
       }
     }
     // A rule refused money that the provider already took: it must be refunded, so keep it visible rather than lost.
-    if (e instanceof DomainError) await setAttempt(ctx, a.key, "refund_due", { error: `${e.code}: ${e.message}` });
+    if (e instanceof DomainError) await setAttempt(ctx.db, a.key, "refund_due", { error: `${e.code}: ${e.message}` });
     // Anything else (database down, crash) leaves 'charged' so retryUnrecorded can finish the job.
     throw e;
   }
@@ -92,7 +96,8 @@ export async function collectDues(ctx: Ctx, memberId: string, phone: string, amo
     "INSERT INTO payment_attempts(key,member_id,amount_minor,state) VALUES ($1,$2,$3,'charging') ON CONFLICT (key) DO NOTHING", [key, memberId, amountMinor]);
   const a = (await ctx.db.query<Attempt>("SELECT * FROM payment_attempts WHERE key=$1", [key]))[0];
   if (a.member_id !== memberId || Number(a.amount_minor) !== amountMinor) return fail("key_reuse", "That payment key was used for a different payment", 409);
-  if (a.state === "recorded") return { ledgerId: a.ledger_id as number, amountMinor, duplicate: true as const };
+  // BIGINT columns come back from a real Postgres server as strings (the embedded one returns numbers): convert.
+  if (a.state === "recorded") return { ledgerId: Number(a.ledger_id), amountMinor, duplicate: true as const };
   if (a.state === "refund_due") return fail("refund_due", a.error ?? "Payment was taken and refused; a refund is due", 422);
 
   let p: IncomingPayment;
@@ -103,10 +108,10 @@ export async function collectDues(ctx: Ctx, memberId: string, phone: string, amo
       p = await ctx.payments.charge(phone, amountMinor, key);
     } catch (e: any) {
       // Outcome unknown: stay in 'charging' (reported by reconcile) and ask the person to try again. The same key makes a retry safe.
-      await setAttempt(ctx, key, "charging", { error: String(e?.message ?? e).slice(0, 200) });
+      await setAttempt(ctx.db, key, "charging", { error: String(e?.message ?? e).slice(0, 200) });
       return fail("payment_unconfirmed", "We could not confirm the payment. You have not been charged twice; try again shortly.", 502);
     }
-    await setAttempt(ctx, key, "charged", { ref: p.ref, currency: p.currency, country: p.country });
+    await setAttempt(ctx.db, key, "charged", { ref: p.ref, currency: p.currency, country: p.country });
   }
   const r = await settle(ctx, a, p);
   return { ledgerId: r.ledgerId, payment: p, amountMinor, duplicate: false as const };
@@ -144,17 +149,21 @@ export async function recordGift(ctx: Ctx, p: IncomingPayment, donor: Donor) {
   const donorKey = ctx.keys.lookupHash("donor", `${donor.name.trim().toLowerCase()}|${donor.address.trim().toLowerCase()}`);
   // A rolling window when the party sets one (DDPN: a year); otherwise the cap is over the donor's lifetime.
   const since = windowDays ? new Date(ctx.clock().getTime() - windowDays * 86_400_000).toISOString() : null;
-  const prior = (await ctx.db.query<{ t: number }>(
-    `SELECT COALESCE(SUM(amount_minor),0)::float8 AS t FROM finance_ledger
-     WHERE kind='gift' AND donor_key=$1 AND ($2::timestamptz IS NULL OR COALESCE(occurred_at, at) >= $2::timestamptz)`, [donorKey, since]))[0].t;
-  if (prior + p.amountMinor > cap) return fail("over_cap", "Gift would exceed the per-donor cap", 422);
-
   const keyId = `donor:${donorKey}`;
-  if (!(await ctx.db.query("SELECT 1 FROM member_keys WHERE member_id=$1", [keyId])).length) await ctx.keys.createKey(keyId);
-  const id = await insertLedger(ctx, {
-    kind: "gift", amountMinor: p.amountMinor, donorKey, donorEnc: await ctx.keys.encrypt(keyId, donor), ref: p.ref });
-  await ctx.log.append({ type: "finance.gift", data: { ledger_id: id, amount_minor: p.amountMinor } });
-  return { ledgerId: id };
+  const id = await ctx.commit(async (tx) => {
+    // Serialise gifts from one donor, then check the cap inside the same transaction as the insert, so two gifts arriving
+    // together cannot both pass a check made before either was written.
+    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [donorKey]);
+    const prior = (await tx.query<{ t: number }>(
+      `SELECT COALESCE(SUM(amount_minor),0)::float8 AS t FROM finance_ledger
+       WHERE kind='gift' AND donor_key=$1 AND ($2::timestamptz IS NULL OR COALESCE(occurred_at, at) >= $2::timestamptz)`, [donorKey, since]))[0].t;
+    if (prior + p.amountMinor > cap) return fail("over_cap", "Gift would exceed the per-donor cap", 422);
+    if (!(await tx.query("SELECT 1 FROM member_keys WHERE member_id=$1", [keyId])).length) await ctx.keys.createKey(keyId, tx);
+    const id = await insertLedger(ctx, tx, {
+      kind: "gift", amountMinor: p.amountMinor, donorKey, donorEnc: await ctx.keys.encrypt(keyId, donor, tx), ref: p.ref });
+    await ctx.events.emit(tx, { type: "finance.gift", data: { ledger_id: id, amount_minor: p.amountMinor } });
+    return id;
+  });  return { ledgerId: id };
 }
 
 /** Donor report for the regulator (Nigeria pack: Reg 44). Auditor-only; the caller must log the access. */

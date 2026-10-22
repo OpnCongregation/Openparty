@@ -22,6 +22,20 @@ All notable changes. This project uses [semantic versioning](https://semver.org/
   software keys, `docs/key-management.md`. Existing data keeps opening (the single key is `k0`).
 - README states plainly that this is not an electronic voting system.
 
+### Resilience
+- **Transactional outbox:** every change and its public-log event commit in one database transaction; a publisher delivers them in
+  order; the log ignores a repeated event key. A crash between the database write and the log append can no longer lose an event.
+  `npm run verify:consistency` and `/healthz` backlog reporting added.
+- **Shared rate limits** (PostgreSQL) and **join confirmation in the database** (encrypted): limits survive restarts and hold across
+  instances. Per-address limit now counts only failed authentications; the gateway is throttled per phone number.
+- Donor cap check now runs in the same transaction as the gift insert, serialised per donor.
+- Trust log: storage seam with a power-loss simulator, SIGKILL test, `trustlog verify` and `trustlog repair`, persisted rate-limit
+  state, idempotent append (`AppendOnce`, HTTP 200 for a repeat).
+- PIN hashing is asynchronous (throughput about doubled under load); `restart: unless-stopped` on all services; idle database
+  connection errors no longer crash the platform; fixed `BIGINT`-as-string bug found by running the suite on real PostgreSQL.
+- Tools: `scripts/loadtest.mjs`, `scripts/chaos.mjs`, `scripts/test-postgres.mjs`, `scripts/powerloss-client.mjs`; docs
+  `docs/load-test.md`, `docs/power-loss-test.md`.
+
 ### Added
 - **Three layers on an international floor.** Floor v1.0 (F1 to F12), a country law pack format with citations, and party settings
   checked against the pack ("a party can tighten the law, never loosen it").

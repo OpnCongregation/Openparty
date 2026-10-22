@@ -31,9 +31,11 @@ export async function registerAdmin(ctx: Ctx, input: { name: string; role: Role;
   if (!ROLES.includes(input.role)) return fail("bad_role", "Unknown role");
   if (input.role === "ward_agent" && !input.ward) return fail("ward_required", "Ward agents need a ward");
   const id = randomUUID();
-  await ctx.db.query("INSERT INTO admins(id,name,role,ward,public_key) VALUES ($1,$2,$3,$4,$5)",
-    [id, input.name, input.role, input.ward ?? null, input.publicKeyHex]);
-  await ctx.log.append({ type: "admin.registered", data: { admin_id: id, role: input.role } });
+  await ctx.commit(async (tx) => {
+    await tx.query("INSERT INTO admins(id,name,role,ward,public_key) VALUES ($1,$2,$3,$4,$5)",
+      [id, input.name, input.role, input.ward ?? null, input.publicKeyHex]);
+    await ctx.events.emit(tx, { type: "admin.registered", data: { admin_id: id, role: input.role } });
+  });
   return id;
 }
 
@@ -61,8 +63,10 @@ export async function authenticate(ctx: Ctx, h: { adminId?: string; ts?: string;
 
 /** Every access is written to the immutable access log and its hash is posted to the public log. */
 export async function logAccess(ctx: Ctx, adminId: string, action: string, detail = "") {
-  await ctx.db.query("INSERT INTO access_log(admin_id,action,detail) VALUES ($1,$2,$3)", [adminId, action, detail]);
-  await ctx.log.append({ type: "admin.access", data: { admin_id: adminId, action, detail_hash: sha256hex(detail) } });
+  await ctx.commit(async (tx) => {
+    await tx.query("INSERT INTO access_log(admin_id,action,detail) VALUES ($1,$2,$3)", [adminId, action, detail]);
+    await ctx.events.emit(tx, { type: "admin.access", data: { admin_id: adminId, action, detail_hash: sha256hex(detail) } });
+  });
 }
 
 // ---- Multi-person approvals -------------------------------------------------------------------
@@ -98,8 +102,10 @@ export async function propose(ctx: Ctx, admin: Admin, action: string, payload: u
   require_(admin, "approval.propose");
   if (!spec.proposers.includes(admin.role)) return fail("forbidden", `${admin.role} cannot propose ${action}`, 403);
   const id = randomUUID();
-  await ctx.db.query("INSERT INTO approvals(id,action,payload,proposer) VALUES ($1,$2,$3,$4)", [id, action, JSON.stringify(payload), admin.id]);
-  await ctx.log.append({ type: "approval.proposed", data: { approval_id: id, action, proposer: admin.id } });
+  await ctx.commit(async (tx) => {
+    await tx.query("INSERT INTO approvals(id,action,payload,proposer) VALUES ($1,$2,$3,$4)", [id, action, JSON.stringify(payload), admin.id]);
+    await ctx.events.emit(tx, { type: "approval.proposed", data: { approval_id: id, action, proposer: admin.id } });
+  });
   return id;
 }
 
@@ -107,7 +113,7 @@ export async function approve(ctx: Ctx, admin: Admin, approvalId: string) {
   require_(admin, "approval.approve");
   // Vote, count and claim in one transaction under a row lock, so two simultaneous requests cannot both reach the
   // threshold and both run the action: exactly one caller wins the 'pending' -> 'executing' transition.
-  const step = await ctx.db.tx(async (tx) => {
+  const step = await ctx.commit(async (tx) => {
     const rows = await tx.query<{ action: string; payload: string; proposer: string; status: string }>("SELECT * FROM approvals WHERE id=$1 FOR UPDATE", [approvalId]);
     if (!rows.length) return fail("not_found", "No such approval", 404);
     const a = rows[0];
@@ -119,16 +125,20 @@ export async function approve(ctx: Ctx, admin: Admin, approvalId: string) {
     const n = (await tx.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM approval_votes WHERE approval_id=$1", [approvalId]))[0].n;
     const claimed = n >= spec.needed
       && (await tx.query("UPDATE approvals SET status='executing' WHERE id=$1 AND status='pending' RETURNING id", [approvalId])).length === 1;
+    await ctx.events.emit(tx, { type: "approval.voted", data: { approval_id: approvalId, admin_id: admin.id, votes: n } });
     return { a, spec, n, claimed };
   });
   const { a, spec, n, claimed } = step;
-  await ctx.log.append({ type: "approval.voted", data: { approval_id: approvalId, admin_id: admin.id, votes: n } });
   if (!claimed) return { executed: false, votes: n, needed: spec.needed };
 
   try {
     const result = await spec.run(ctx, JSON.parse(a.payload), a.proposer);
-    await ctx.db.query("UPDATE approvals SET status='executed', result=$2 WHERE id=$1", [approvalId, JSON.stringify(result ?? null)]);
-    await ctx.log.append({ type: "approval.executed", data: { approval_id: approvalId, action: a.action } });
+    // The action committed in its own transaction above; marking it executed and announcing it commit together. A crash
+    // between the two leaves the approval in 'executing', which verify:consistency reports.
+    await ctx.commit(async (tx) => {
+      await tx.query("UPDATE approvals SET status='executed', result=$2 WHERE id=$1", [approvalId, JSON.stringify(result ?? null)]);
+      await ctx.events.emit(tx, { type: "approval.executed", data: { approval_id: approvalId, action: a.action } });
+    });
     return { executed: true, votes: n, needed: spec.needed, result };
   } catch (e: any) {
     await ctx.db.query("UPDATE approvals SET status='failed', result=$2 WHERE id=$1", [approvalId, String(e.message)]);

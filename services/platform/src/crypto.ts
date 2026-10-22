@@ -1,4 +1,5 @@
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { promisify } from "node:util";
 import type { Db } from "./db.js";
 
 export class ErasedError extends Error {
@@ -111,6 +112,20 @@ export class KeyStore {
     } else this.provider = master;
   }
 
+  /**
+   * Encrypt a short-lived value (for example a pending join) under a fresh data key that is wrapped by the master key.
+   * Nothing is stored per member, so there is no key row to delete: the value is simply deleted when it expires.
+   */
+  sealTemp(value: unknown, aad: string): string {
+    const dek = randomBytes(32);
+    return `${this.provider.wrap(dek, aad)}~${seal(dek, Buffer.from(JSON.stringify(value)), aad)}`;
+  }
+
+  openTemp<T = any>(blob: string, aad: string): T {
+    const [wrapped, sealed] = blob.split("~");
+    return JSON.parse(open(this.provider.unwrap(wrapped, aad), sealed, aad).toString());
+  }
+
   get software() { return this.provider.software; }
   get activeKeyId() { return this.provider.activeId; }
 
@@ -176,14 +191,18 @@ export class KeyStore {
   }
 }
 
-export function hashPin(pin: string): string {
+// scrypt is deliberately slow (tens of milliseconds). The synchronous form blocks the whole process while it runs, so every
+// join and PIN check stalled every other request; the asynchronous form runs on the thread pool. Measured: see docs/load-test.md.
+const scryptAsync = promisify(scrypt) as (pw: string, salt: Buffer, len: number) => Promise<Buffer>;
+
+export async function hashPin(pin: string): Promise<string> {
   const salt = randomBytes(16);
-  return `${b64(salt)}.${b64(scryptSync(pin, salt, 32))}`;
+  return `${b64(salt)}.${b64(await scryptAsync(pin, salt, 32))}`;
 }
 
-export function checkPin(pin: string, stored: string): boolean {
+export async function checkPin(pin: string, stored: string): Promise<boolean> {
   const [salt, hash] = stored.split(".");
-  const got = scryptSync(pin, Buffer.from(salt, "base64"), 32);
+  const got = await scryptAsync(pin, Buffer.from(salt, "base64"), 32);
   const want = Buffer.from(hash, "base64");
   return got.length === want.length && timingSafeEqual(got, want);
 }

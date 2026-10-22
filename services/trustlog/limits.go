@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -91,4 +94,66 @@ func newHTTPServer(addr string, h http.Handler) *http.Server {
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 	}
+}
+
+// ---- Persistence ---------------------------------------------------------------------------------------------------
+// The limiter state is written to disk so a restart does not hand every address a fresh allowance. This is one log
+// process per data directory (the log has a single writer by design), so there is nothing to coordinate between
+// instances; several log instances on one data directory are not supported.
+
+type savedBucket struct {
+	Tokens float64 `json:"t"`
+	Last   int64   `json:"l"` // unix nanoseconds
+}
+
+// save writes the buckets that are not full (a full bucket is the same as no bucket). Atomic: temp file then rename.
+func (l *ipLimiter) save(path string) error {
+	l.mu.Lock()
+	out := make(map[string]savedBucket, len(l.buckets))
+	now := l.now()
+	for k, b := range l.buckets {
+		t := b.tokens + now.Sub(b.last).Seconds()*l.rate
+		if t < l.burst {
+			out[k] = savedBucket{Tokens: t, Last: now.UnixNano()}
+		}
+	}
+	l.mu.Unlock()
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// load restores saved buckets. A missing or unreadable file is not an error: the limiter just starts empty.
+func (l *ipLimiter) load(path string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var in map[string]savedBucket
+	if json.Unmarshal(raw, &in) != nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for k, s := range in {
+		l.buckets[k] = &bucket{tokens: s.Tokens, last: time.Unix(0, s.Last)}
+	}
+}
+
+// persist loads the saved state, then saves it every interval and when the returned function is called (on shutdown).
+func (l *ipLimiter) persist(dir string, every time.Duration) (flush func()) {
+	path := filepath.Join(dir, "ratelimit.json")
+	l.load(path)
+	go func() {
+		for range time.Tick(every) {
+			l.save(path)
+		}
+	}()
+	return func() { l.save(path) }
 }

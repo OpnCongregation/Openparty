@@ -1,6 +1,6 @@
 # Security review follow-up, October 2026
 
-Two review passes raised eleven findings. This records what was changed, what proves it, and what **cannot** be settled in code.
+Two review passes raised eleven findings, and a third pass (section "Follow-up") three more. This records what was changed, what proves it, and what **cannot** be settled in code.
 It is a self-assessment by the project, not an audit. No independent party has reviewed this code.
 
 Status key: **Fixed** = changed and covered by tests. **Partly** = the code part is done, the rest needs a person or a service.
@@ -15,10 +15,13 @@ Status key: **Fixed** = changed and covered by tests. **Partly** = the code part
 | F-03 | Key lifecycle and recovery | **Partly** |
 | F-04 | Service ports without a network boundary | **Fixed** (config); needs a scan on the real host |
 | F-05 | No end-to-end voting guarantees | **Open** (unbuilt by design) |
-| F-06 | Concurrent approvals could execute twice | **Fixed** |
-| F-07 | Log persistence not crash-consistent | **Fixed** (on this filesystem); power-loss test **open** |
-| F-08 | Public log API resource limits | **Fixed** (basic limits); load test **open** |
+| F-06 | Concurrent approvals could execute twice | **Fixed**; race test passes on real PostgreSQL |
+| F-07 | Log persistence not crash-consistent | **Fixed**; simulated power loss and process-kill tests pass; a real power cut is **owner-run** |
+| F-08 | Public log API resource limits | **Fixed**; measured on the dev stack; load test on the real deployment is **owner-run** |
 | F-09 | Payment idempotency and reconciliation | **Partly** |
+| C-1 | A crash between the database write and the log append leaves an event missing | **Fixed** (transactional outbox) |
+| C-2 | Rate limits are per process: reset on restart, not shared across instances | **Fixed** (platform: shared through PostgreSQL; log: persisted, single instance by design) |
+| C-3 | Power-loss recovery and real-deployment load untested | **Partly**: tools, simulations and local measurements done; real power cut and real-deployment load are **owner-run** |
 
 ## What was fixed
 
@@ -74,16 +77,43 @@ rotated on real Postgres (3 data keys from `k0` to `k1`) and all three member re
 | **F-01 gateway authentication** | Africa's Talking-style gateways do not sign requests; a shared secret and source IP allowlist is what is available, and the real IPs are unknown. | Confirm with the chosen gateway what authentication and source addresses it offers; set `USSD_ALLOWED_IPS`; keep the secret out of URLs that are logged. |
 | **F-01 phone number as identity** | A phone number from the carrier is still only a claim (SIM swap, spoofed MSISDN at a bad gateway). The PIN and attempt limit are the control. | Decide whether dues or card lookups need a stronger factor for SIM-swap risk; monitor `pin_locked` events. |
 | **F-09 real provider** | The payment adapter is simulated. Real idempotency, timeouts, webhooks and refunds depend on the provider. | A real adapter must honour `idempotencyKey` (documented on the interface), pass the conformance behaviour in `FlakyPayments` tests, and refunds for `refund_due` need a process. |
-| **F-06 on real Postgres** | The race test ran on embedded Postgres (single connection, serialised). The row lock is standard Postgres but was not exercised with concurrent connections. | Run `test/hardening.test.ts` against `DATABASE_URL` (the suite still defaults to embedded). |
-| **F-07 power loss** | fsync is called; whether the disk, Docker volume or hypervisor honours it was not tested. No kill-during-write harness exists. | Test on the target host with forced power-off or a fault-injecting filesystem. |
-| **F-08 load** | Limits are unit tested; behaviour under real traffic and a reverse proxy (where the limiter sees the proxy's address) was not. | Load test through the real proxy; add limits at the proxy too. |
+| **F-07 / C-3 real power cut** | The log's write and sync ORDER is tested against a disk that forgets unsynced data, and the process is killed at random points. Whether a real disk, Docker volume or hypervisor honours `fsync` can only be found by cutting power. | Run the procedure in [power-loss-test.md](power-loss-test.md) on the deployment hardware, at least ten cycles. |
+| **F-08 / C-3 real load** | Measured on one laptop with the generator on the same machine ([load-test.md](load-test.md)). Behaviour with a real proxy (where per-address limits see the proxy), real gateway peaks and sustained hours is unknown. | Run `scripts/loadtest.mjs` from another machine through the real proxy; limit at the proxy too; put a cache in front of the public log reads. |
+| **PIN hashing capacity** | PIN hashing is now the platform's capacity limit (about 75 ms CPU per join and PIN check on the test machine). | Size cores for expected peak, or version the hash format to lower its cost / key it with a secret from the key store (not done). |
 
+## Follow-up: consistency, shared limits, resilience
+
+**C-1 Database and public log (transactional outbox).** Every domain change used to write the database and then call the log in a
+separate step; a crash between them lost the event, and (in one place) a rollback could leave an event with no row. Now each change
+queues its event in the `log_outbox` table **inside the same database transaction** (`ctx.commit` + `ctx.events.emit`, 24 call
+sites in `members`, `finance`, `contests`, `participation`, `admin`, `deploy`). A publisher copies committed events to the log in
+order (advisory lock, so one publisher at a time even across instances), right after commit and again from a background loop
+that heals a crash. Each event carries a random key (`oid`); the log ignores a repeated key, so publishing twice is harmless
+(`AppendOnce`, kept across restarts). An event that could never pass the public-log allowlist now fails the transaction instead of
+waiting forever. `npm run verify:consistency` compares the database with every log entry. `/healthz` reports the backlog and turns
+"degraded" if an event waits over a minute. Also fixed on the way: a donor cap check that two simultaneous gifts could both pass
+(now serialised per donor inside the same transaction as the insert). Evidence: 22 tests in `test/resilience.test.ts`, 8 Go tests for the key, the crash run in
+[load-test.md](load-test.md) (347 joins and 334 payments: database and log agree exactly), and 2,909 events matched on the demo stack.
+Residual: an approval whose action committed but whose "executed" mark did not is left in `executing`; the checker reports it, nothing repairs it.
+
+**C-2 Shared rate limits.** Platform limits (per phone, failed authentication, simulator, gateway ceiling) count in PostgreSQL
+(`UNLOGGED rate_limits`, blended sliding window) behind a local in-memory layer, so they hold across restarts and several instances.
+Also changed: the per-address limit no longer caps the whole gateway (all real traffic arrives from the aggregator''s few addresses): it
+counts only FAILED authentications; the real per-user throttle is per phone number. Join confirmation moved from an in-process map
+to an encrypted `pending_joins` table, which removes the other single-instance restriction. The trust log is single-writer by
+design (one process per data directory), so there is nothing to coordinate; its limiter state is now saved every 10 s and on SIGTERM
+and reloaded at start. Not done: a shared store faster than PostgreSQL (Redis) was considered and not chosen; each USSD request costs
+one extra small write. A crash of the database itself resets the counters (UNLOGGED table).
+
+**C-3 Power loss and load.** Added: a storage seam in the log with a disk simulator that loses unsynced data (400 random trials,
+four crash shapes), a SIGKILL harness (30 kills), `trustlog verify` and `trustlog repair`, a power-cut client and procedure, a chaos test for the Docker stack, a load tester, and the platform suite on real
+PostgreSQL (157 tests pass; this also found a real bug: `BIGINT` columns are strings on a real server, fixed). The load test found
+that PIN hashing blocked the whole process (now asynchronous; throughput roughly doubled). A crash test also showed the platform exiting when
+a database connection died while idle (now logged and reconnected), and the compose file now restarts services (`restart: unless-stopped`).
 ## Smaller things noticed
 
-- A log event is appended after the database write (members, finance). A crash between the two leaves a database row with no
-  public event. Not fixed; it needs an outbox pattern. For payments, the retry adopts the existing ledger row and does not re-emit it.
-- The join confirmation (`ctx.pending`) is an in-process map, so USSD works with one platform instance only.
-- Rate limiters are in memory per process; restarting resets them and several instances do not share counts.
+- If a payment was recorded by an earlier run that died before updating its attempt, the retry adopts the existing ledger row and does not re-emit its event (rare; it predates the outbox).
+- The witnesses run on the same host as the log in the demo stack; real witnesses are independent parties.
 - A successful PIN check resets the failure counter to zero, so an attacker timing guesses around a legitimate login could gain a few extra attempts.
 - Pepper rotation has no tool (`docs/key-management.md`).
 

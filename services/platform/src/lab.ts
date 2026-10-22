@@ -1,4 +1,4 @@
-﻿import { readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { createCtx } from "./platform.js";

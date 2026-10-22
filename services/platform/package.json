@@ -9,6 +9,7 @@
     "test": "vitest run",
     "start": "tsx src/main.ts",
     "rotate-keys": "tsx src/rotate-keys.ts",
+    "verify:consistency": "tsx src/verify-consistency.ts",
     "validate:packs": "tsx src/framework/cli.ts"
   },
   "dependencies": {

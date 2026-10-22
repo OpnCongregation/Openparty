@@ -10,8 +10,10 @@ export async function createProposal(ctx: Ctx, memberId: string, title: string, 
   if (!title.trim() || !body.trim()) return fail("empty", "Title and body are required");
   const t = threshold ?? (await getRule<number>(ctx, "proposals.threshold"));
   const id = randomUUID();
-  await ctx.db.query("INSERT INTO proposals(id,author_id,title,body,threshold) VALUES ($1,$2,$3,$4,$5)", [id, memberId, title, body, t]);
-  await ctx.log.append({ type: "proposal.created", data: { proposal_id: id, threshold: t, author_ref: logRef(ctx, "member", memberId) } });
+  await ctx.commit(async (tx) => {
+    await tx.query("INSERT INTO proposals(id,author_id,title,body,threshold) VALUES ($1,$2,$3,$4,$5)", [id, memberId, title, body, t]);
+    await ctx.events.emit(tx, { type: "proposal.created", data: { proposal_id: id, threshold: t, author_ref: logRef(ctx, "member", memberId) } });
+  });
   return id;
 }
 
@@ -25,7 +27,7 @@ export async function signProposal(ctx: Ctx, memberId: string, proposalId: strin
 
   // Read config before opening the transaction: queries on ctx.db inside it would use another connection.
   const days = await getRule<number>(ctx, "proposals.response_days");
-  return ctx.db.tx(async (tx) => {
+  return ctx.commit(async (tx) => {
     const p = await tx.query<{ threshold: number; status: string }>("SELECT threshold,status FROM proposals WHERE id=$1", [proposalId]);
     if (!p.length) return fail("not_found", "No such proposal", 404);
     const dup = await tx.query("INSERT INTO signatures(proposal_id,member_id) VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING 1", [proposalId, memberId]);
@@ -37,7 +39,7 @@ export async function signProposal(ctx: Ctx, memberId: string, proposalId: strin
       await tx.query("INSERT INTO agenda(proposal_id,respond_by) VALUES ($1,$2)", [proposalId, new Date(ctx.clock().getTime() + days * DAY).toISOString()]);
       queued = true;
     }
-    if (queued) await ctx.log.append({ type: "proposal.threshold_reached", data: { proposal_id: proposalId, signatures: count } });
+    if (queued) await ctx.events.emit(tx, { type: "proposal.threshold_reached", data: { proposal_id: proposalId, signatures: count } });
     return { signatures: count, queued };
   });
 }

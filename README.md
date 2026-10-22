@@ -67,6 +67,8 @@ docker logs openparty-trustlog-1           # copy key=<hex> and set it as LOG_KE
 docker compose up -d                       # witnesses can now start
 ```
 
+Testing: `npm run report` runs everything on embedded Postgres; `node scripts/test-postgres.mjs` runs the platform suite on a real PostgreSQL 16 in Docker; `npm run verify:consistency` (in `services/platform`) checks the database against the public log; see [docs/load-test.md](docs/load-test.md) and [docs/power-loss-test.md](docs/power-loss-test.md).
+
 Ports: log 8080, platform 3000, portal 3001. In `docker-compose.yml` these are published on `127.0.0.1` only. To serve other machines, put a TLS-terminating reverse proxy in front and expose only the routes it needs (never the admin routes, the log's append endpoint or the lab); do not simply change the bind address. The Rules lab and Test results need `LAB_ENABLED=1` in `.env`; leave it at `0` outside demos.
 Data lives in named volumes; `docker compose down` keeps it, `down -v` wipes it (and the log key). Two witnesses on one host are a demo only.
 

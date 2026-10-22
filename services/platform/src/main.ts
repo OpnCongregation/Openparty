@@ -5,6 +5,7 @@ import { HttpTrustLog } from "./adapters.js";
 import { registerLab } from "./lab.js";
 import { recordDeployment } from "./framework/deploy.js";
 
+const envNum = (k: string) => (process.env[k] ? Number(process.env[k]) : undefined);
 const logUrl = process.env.TRUSTLOG_URL;
 const keyProvider = keyProviderFromEnv(process.env);
 // The only key provider so far holds the master key in this process's memory. That is not an HSM, so a production
@@ -31,12 +32,19 @@ if (!ussdSecret && !lab)
   throw new Error("USSD_WEBHOOK_SECRET is not set. The USSD webhook trusts the phone number it is sent, so it only runs for a caller that proves it is the gateway. Set the secret (see .env.example).");
 if (!ussdSecret) console.warn("USSD_WEBHOOK_SECRET not set: only the lab simulator route /ussd/sim is available. Demo only.");
 
+// Publish committed events to the public log in the background: this heals the gap left by a crash between commit and publish.
+ctx.events.start();
+for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { ctx.events.stop(); void ctx.events.flush().finally(() => process.exit(0)); });
+
 const app = buildServer(ctx, {
   trustProxy: process.env.TRUST_PROXY === "1",
   ussd: {
     secret: ussdSecret,
     allowedIps: process.env.USSD_ALLOWED_IPS?.split(",").map((s) => s.trim()).filter(Boolean),
     sim: lab,
+    perIp: envNum("USSD_RATE_AUTHFAIL"),
+    perPhone: envNum("USSD_RATE_PER_PHONE"),
+    perGateway: envNum("USSD_RATE_PER_GATEWAY"),
   },
 });
 if (lab) registerLab(app); // sandboxed scenario runner; never touches this database

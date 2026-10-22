@@ -75,6 +75,10 @@ export interface IncomingPayment {
 export interface LogEvent {
   type: string;
   data: Record<string, unknown>;
+  /** When the event was committed (set by the outbox). Defaults to the time of publishing. */
+  at?: string;
+  /** Idempotency key: the log ignores a second append with the same oid and returns the first index. */
+  oid?: string;
 }
 
 export interface TrustLog {
@@ -104,7 +108,7 @@ export class HttpTrustLog implements TrustLog {
   constructor(private url: string, private token: string) {}
   async append(e: LogEvent) {
     assertPublicLogSafe(e);
-    const body = canonical({ ...e, at: new Date().toISOString() });
+    const body = canonical({ ...e, at: e.at ?? new Date().toISOString() });
     const r = await fetch(`${this.url.replace(/\/$/, "")}/append`, {
       method: "POST",
       headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" },
@@ -120,6 +124,8 @@ export class MemoryTrustLog implements TrustLog {
   events: (LogEvent & { index: number })[] = [];
   async append(e: LogEvent) {
     assertPublicLogSafe(e);
+    const seen = e.oid ? this.events.find((x) => x.oid === e.oid) : undefined;
+    if (seen) return { index: seen.index }; // same idempotency key: already logged
     const index = this.events.length;
     this.events.push({ ...e, index });
     return { index };

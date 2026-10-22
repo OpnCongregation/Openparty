@@ -1,4 +1,4 @@
-﻿import type { Ctx } from "./context.js";
+import type { Ctx } from "./context.js";
 import { DomainError } from "./errors.js";
 import { t, tSpecific } from "./i18n.js";
 import { confirmJoin, prepareJoin, verifyPin } from "./members.js";
@@ -10,7 +10,7 @@ const end = (s: string) => `END ${s}`;
 
 /**
  * Africa's Talking-style USSD: `text` is every answer so far joined by "*". Stateless apart from the
- * short-lived ID check held in ctx.pending, so any server instance can answer any step.
+ * short-lived ID check held (encrypted) in the pending_joins table, so any server instance can answer any step.
  * All wording comes from locales/*.json; the ID prompt follows the deployment's ID adapter.
  */
 export async function handleUssd(ctx: Ctx, phone: string, text: string, sessionId?: string): Promise<string> {

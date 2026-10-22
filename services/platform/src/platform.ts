@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { openDb } from "./db.js";
 import { KeyStore, type KeyProvider } from "./crypto.js";
 import type { Ctx } from "./context.js";
+import { Outbox } from "./outbox.js";
 import { MemoryTrustLog, SimNgNinAdapter, SimPayments, SimSms, type IdAdapter, type Payments, type Sms, type TrustLog } from "./adapters.js";
 import { buildConfig, loadDefaultConfig } from "./framework/config.js";
 import type { Config } from "./framework/types.js";
@@ -33,8 +34,12 @@ export async function createCtx(o: PlatformOptions = {}): Promise<Ctx> {
   const idAdapter = o.idAdapter ?? ID_ADAPTERS[wanted]?.();
   if (!idAdapter) throw new Error(`identity adapter "${wanted}" is not installed (installed: ${Object.keys(ID_ADAPTERS).join(", ")})`);
   if (idAdapter.id !== wanted) throw new Error(`the configuration asks for identity adapter "${wanted}" but "${idAdapter.id}" was supplied`);
-  const db = await openDb(o.databaseUrl);
+  // Test hook: the suite can run against a real Postgres server (scripts/test-postgres.mjs), each test in its own schema.
+  const testUrl = process.env.VITEST ? process.env.OPENPARTY_TEST_DATABASE_URL : undefined;
+  const db = o.databaseUrl ? await openDb(o.databaseUrl) : testUrl ? await openDb(testUrl, { schema: `t_${randomBytes(8).toString("hex")}` }) : await openDb();
   const key = (hex: string | undefined) => (hex ? Buffer.from(hex, "hex") : randomBytes(32));
+  const log = o.log ?? new MemoryTrustLog();
+  const events = new Outbox(db, log);
   return {
     db,
     keys: new KeyStore(db, o.keyProvider ?? key(o.masterKeyHex), key(o.pepperHex)),
@@ -42,9 +47,14 @@ export async function createCtx(o: PlatformOptions = {}): Promise<Ctx> {
     idAdapter,
     sms: o.sms ?? new SimSms(),
     payments: o.payments ?? new SimPayments(config.pack.currency.code, config.pack.country),
-    log: o.log ?? new MemoryTrustLog(),
+    log,
+    events,
+    async commit(fn) {
+      const r = await db.tx(fn);
+      await events.flush(); // best effort: never throws; a failure leaves the event queued for the background publisher
+      return r;
+    },
     clock: o.clock ?? (() => new Date()),
-    pending: new Map(),
   };
 }
 

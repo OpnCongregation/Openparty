@@ -62,6 +62,14 @@ one-way hash for "one person, one membership". Adapters must pass the public con
 ## Privacy by construction
 
 - Per-member encryption keys; erasure destroys the key (the entry stays, unreadable).
+- **Database and public log stay in step (outbox).** A change and its public event are written in ONE database transaction
+  (`ctx.commit(tx => { write; ctx.events.emit(tx, event) })`); a publisher then copies committed events to the log in order, under an advisory
+  lock, right after commit and from a background loop. Each event has a random key (`oid`) and the log ignores a repeated key, so
+  retries are safe and a crash between commit and publish only delays the event. `npm run verify:consistency` checks the database against
+  every log entry; `/healthz` reports the backlog. Domain code must not call the log directly.
+- **Shared state, so more than one platform instance can run.** Rate-limit counters (`rate_limits`, UNLOGGED) and pending joins
+  (`pending_joins`, encrypted) live in PostgreSQL; nothing about a request is kept in process memory. The trust log is the exception by
+  design: one writer per data directory.
 - **Log durability.** `Append` returns only after the record is written and fsynced (and the directory, for a new file). A crash
   mid-append leaves at most one torn final record, which `OpenLog` drops and logs (it was never acknowledged); damage anywhere
   earlier is refused, not repaired. The log is the single writer: one instance per data directory.
@@ -70,14 +78,15 @@ one-way hash for "one person, one membership". Adapters must pass the public con
   refused with 413; HTTP servers have read, write and idle timeouts. The limiter keys on the connecting address, so behind a
   proxy it sees the proxy: limit at the proxy as well.
 - **USSD webhook.** `POST /ussd` exists only when `USSD_WEBHOOK_SECRET` is set, compares it in constant time, optionally checks
-  `USSD_ALLOWED_IPS`, validates the payload and rate limits per address and per phone. `POST /ussd/sim` (no secret) exists only
+  `USSD_ALLOWED_IPS`, validates the payload and rate limits: failed authentications per address, requests per phone, a high ceiling per gateway address (counts shared through the database). `POST /ussd/sim` (no secret) exists only
   when `LAB_ENABLED=1`. A phone number from the gateway is a claim; PIN attempts are counted atomically (5 per member) because
   a 4-digit PIN is only as strong as that counter.
 - **Money.** Every dues collection is a `payment_attempts` row written before the provider is called and keyed by the gateway
   session; the provider receives the same idempotency key on retries. `reconcile` reports payments charged but not recorded,
   unconfirmed, or refused after being taken; `POST /admin/finance/retry-payments` finishes the first kind.
 - **Approvals** run exactly once: vote, count and the pending to executing claim happen in one transaction under a row lock.
-- Master keys: see [key-management.md](key-management.md).
+- PIN hashing (scrypt) runs asynchronously on the thread pool and is the platform's capacity limit; see [load-test.md](load-test.md).
+- Crash recovery and power loss: [power-loss-test.md](power-loss-test.md). Master keys: see [key-management.md](key-management.md).
 - The public log accepts only listed event types with exactly their listed fields, each in a strict shape (`src/logschema.ts`).
   Free text, nested objects and serialized JSON do not fit a shape. The old key denylist (`assertNoPersonalData`) remains as a second check.
   A new event type or field must be added to the allowlist before it can be logged.

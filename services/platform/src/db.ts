@@ -52,11 +52,26 @@ class PgDb implements Db {
   }
 }
 
-/** Real Postgres when url is given; embedded Postgres (PGlite) otherwise, for dev and tests. */
-export async function openDb(url?: string): Promise<Db> {
+/**
+ * Real Postgres when url is given; embedded Postgres (PGlite) otherwise, for dev and tests.
+ * `schema` (tests only) puts everything in its own Postgres schema, so many test databases can share one server.
+ */
+export async function openDb(url?: string, opts: { schema?: string } = {}): Promise<Db> {
+  if (url && opts.schema) {
+    if (!/^[a-z_][a-z0-9_]{0,40}$/.test(opts.schema)) throw new Error("bad schema name");
+    const admin = new pg.Client({ connectionString: url });
+    await admin.connect();
+    try { await admin.query(`CREATE SCHEMA IF NOT EXISTS ${opts.schema}`); } finally { await admin.end(); }
+  }
   const db: Db = url
     ? (() => {
-        const pool = new pg.Pool({ connectionString: url });
+        const pool = new pg.Pool({
+          connectionString: url,
+          ...(opts.schema ? { options: `-c search_path=${opts.schema}`, max: 4, idleTimeoutMillis: 1000 } : {}),
+        });
+        // An idle connection that dies (database restarted, network cut) emits "error" on the pool. With no listener Node
+        // treats that as fatal and the whole platform exits; log it and let the pool open a fresh connection instead.
+        pool.on("error", (e) => console.error("postgres: idle connection error (will reconnect):", e.message));
         return new PgDb(pool, pool);
       })()
     : new PgliteDb(new PGlite());

@@ -37,8 +37,10 @@ export async function setRule(ctx: Ctx, key: string, value: unknown, adminId: st
   const locked = await ctx.db.query("SELECT 1 FROM contests WHERE state IN ('noticed','open') LIMIT 1");
   if (locked.length) return fail("rules_locked", "Rules are locked: a contest notice is out", 423);
   const v = (await ctx.db.query<{ v: number }>("SELECT COALESCE(MAX(version),0)+1 AS v FROM rules WHERE key=$1", [key]))[0].v;
-  await ctx.db.query("INSERT INTO rules(key,version,value,set_by) VALUES ($1,$2,$3,$4)", [key, v, JSON.stringify(value), adminId]);
-  await ctx.log.append({ type: "rule.set", data: { key, version: v, value_hash: sha256hex(canonical(value)), set_by: adminId } });
+  await ctx.commit(async (tx) => {
+    await tx.query("INSERT INTO rules(key,version,value,set_by) VALUES ($1,$2,$3,$4)", [key, v, JSON.stringify(value), adminId]);
+    await ctx.events.emit(tx, { type: "rule.set", data: { key, version: v, value_hash: sha256hex(canonical(value)), set_by: adminId } });
+  });
 }
 
 // ---- Contests ---------------------------------------------------------------------------------
@@ -65,9 +67,11 @@ export async function createContest(
   if (!ctx.config.get<string[]>("primary.allowed_types").includes(input.primaryType))
     return fail("bad_primary_type", `Primary type must be one of: ${ctx.config.get<string[]>("primary.allowed_types").join(", ")}`);
   const id = randomUUID();
-  await ctx.db.query("INSERT INTO contests(id,name,primary_type,mode,vote_date) VALUES ($1,$2,$3,$4,$5)",
-    [id, input.name, input.primaryType, input.mode, input.voteDate.toISOString()]);
-  await ctx.log.append({ type: "contest.created", data: { contest_id: id, mode: input.mode, vote_date: input.voteDate.toISOString() } });
+  await ctx.commit(async (tx) => {
+    await tx.query("INSERT INTO contests(id,name,primary_type,mode,vote_date) VALUES ($1,$2,$3,$4,$5)",
+      [id, input.name, input.primaryType, input.mode, input.voteDate.toISOString()]);
+    await ctx.events.emit(tx, { type: "contest.created", data: { contest_id: id, mode: input.mode, vote_date: input.voteDate.toISOString() } });
+  });
   return id;
 }
 
@@ -79,8 +83,10 @@ export async function changePrimaryType(ctx: Ctx, contestId: string, type: strin
   if (new Date(c.vote_date).getTime() - ctx.clock().getTime() <= lockDays * DAY)
     return fail("type_locked", `Primary type is locked inside ${lockDays} days of the vote`, 423);
   if (c.state === "open" || c.state === "closed") return fail("bad_state", "Contest already open or closed", 409);
-  await ctx.db.query("UPDATE contests SET primary_type=$2 WHERE id=$1", [contestId, type]);
-  await ctx.log.append({ type: "contest.type_changed", data: { contest_id: contestId, primary_type: type } });
+  await ctx.commit(async (tx) => {
+    await tx.query("UPDATE contests SET primary_type=$2 WHERE id=$1", [contestId, type]);
+    await ctx.events.emit(tx, { type: "contest.type_changed", data: { contest_id: contestId, primary_type: type } });
+  });
 }
 
 /** The law pack sets the notice period (21 days in Nigeria). A late notice voids the contest, so the system refuses to issue one. */
@@ -92,8 +98,10 @@ export async function generateNotice(ctx: Ctx, contestId: string) {
   const noticeDays = ctx.config.get<number>("notice.days_before_contest");
   if (daysLeft < noticeDays) return fail("notice_late", `Only ${daysLeft.toFixed(1)} days to vote; ${noticeDays} days' notice is required`, 422);
   const hash = await rulesHash(ctx);
-  await ctx.db.query("UPDATE contests SET state='noticed', notice_at=$2, rules_hash=$3 WHERE id=$1", [contestId, ctx.clock().toISOString(), hash]);
-  await ctx.log.append({ type: "contest.noticed", data: { contest_id: contestId, mode: c.mode, rules_hash: hash, vote_date: new Date(c.vote_date).toISOString() } });
+  await ctx.commit(async (tx) => {
+    await tx.query("UPDATE contests SET state='noticed', notice_at=$2, rules_hash=$3 WHERE id=$1", [contestId, ctx.clock().toISOString(), hash]);
+    await ctx.events.emit(tx, { type: "contest.noticed", data: { contest_id: contestId, mode: c.mode, rules_hash: hash, vote_date: new Date(c.vote_date).toISOString() } });
+  });
   return { contestId, mode: c.mode, voteDate: c.vote_date, rulesHash: hash, noticeDeadline: new Date(new Date(c.vote_date).getTime() - noticeDays * DAY) };
 }
 
@@ -102,8 +110,10 @@ export async function recordNoticeReceipt(ctx: Ctx, contestId: string, receipt: 
   if (c.state !== "noticed") return fail("bad_state", "Generate the notice first", 409);
   if (c.notice_receipt) return fail("already_set", "Receipt already recorded", 409);
   if (!receipt.trim()) return fail("receipt_required", "Receipt reference required");
-  await ctx.db.query("UPDATE contests SET notice_receipt=$2 WHERE id=$1", [contestId, receipt]);
-  await ctx.log.append({ type: "contest.notice_receipt", data: { contest_id: contestId, receipt_hash: sha256hex(receipt) } });
+  await ctx.commit(async (tx) => {
+    await tx.query("UPDATE contests SET notice_receipt=$2 WHERE id=$1", [contestId, receipt]);
+    await ctx.events.emit(tx, { type: "contest.notice_receipt", data: { contest_id: contestId, receipt_hash: sha256hex(receipt) } });
+  });
 }
 
 // ---- Register ---------------------------------------------------------------------------------
@@ -133,15 +143,15 @@ export async function freezeRegister(ctx: Ctx, contestId: string) {
   const fingerprint = sha256hex(exportJson);
   const id = randomUUID();
 
-  await ctx.db.tx(async (tx) => {
+  await ctx.commit(async (tx) => {
     await ctx.keys.createKey(`register:${id}`, tx);
     await tx.query(
       "INSERT INTO registers(id,contest_id,frozen_at,fingerprint,member_count,export_json) VALUES ($1,$2,$3,$4,$5,$6)",
       [id, contestId, ctx.clock().toISOString(), fingerprint, rows.length, await ctx.keys.encrypt(`register:${id}`, JSON.parse(exportJson), tx)]);
     for (const m of members) await tx.query("INSERT INTO register_members(register_id,member_id) VALUES ($1,$2)", [id, m.id]);
     await tx.query("UPDATE contests SET register_id=$2 WHERE id=$1", [contestId, id]);
+    await ctx.events.emit(tx, { type: "register.frozen", data: { contest_id: contestId, register_id: id, fingerprint, member_count: rows.length } });
   });
-  await ctx.log.append({ type: "register.frozen", data: { contest_id: contestId, register_id: id, fingerprint, member_count: rows.length } });
   return { registerId: id, fingerprint, memberCount: rows.length };
 }
 
@@ -161,9 +171,11 @@ export function validateRegisterExport(doc: { members: Partial<RegisterRecord>[]
 
 export async function recordRegisterReceipt(ctx: Ctx, registerId: string, receipt: string) {
   if (!receipt.trim()) return fail("receipt_required", "Receipt reference required");
-  const r = await ctx.db.query("UPDATE registers SET inec_receipt=$2 WHERE id=$1 AND inec_receipt IS NULL RETURNING id", [registerId, receipt]);
-  if (!r.length) return fail("bad_state", "Unknown register or receipt already recorded", 409);
-  await ctx.log.append({ type: "register.receipt", data: { register_id: registerId, receipt_hash: sha256hex(receipt) } });
+  await ctx.commit(async (tx) => {
+    const r = await tx.query("UPDATE registers SET inec_receipt=$2 WHERE id=$1 AND inec_receipt IS NULL RETURNING id", [registerId, receipt]);
+    if (!r.length) return fail("bad_state", "Unknown register or receipt already recorded", 409);
+    await ctx.events.emit(tx, { type: "register.receipt", data: { register_id: registerId, receipt_hash: sha256hex(receipt) } });
+  });
 }
 
 // ---- Opening the contest ----------------------------------------------------------------------
@@ -177,14 +189,18 @@ export async function openContest(ctx: Ctx, contestId: string) {
   const reg = await ctx.db.query<{ inec_receipt: string | null }>("SELECT inec_receipt FROM registers WHERE id=$1", [c.register_id]);
   if (!reg[0]?.inec_receipt) return fail("no_register_receipt", "INEC register receipt not recorded", 423);
   if (await rulesHash(ctx) !== c.rules_hash) return fail("rules_changed", "Rules differ from those in the notice", 500);
-  await ctx.db.query("UPDATE contests SET state='open' WHERE id=$1", [contestId]);
-  await ctx.log.append({ type: "contest.opened", data: { contest_id: contestId } });
+  await ctx.commit(async (tx) => {
+    await tx.query("UPDATE contests SET state='open' WHERE id=$1", [contestId]);
+    await ctx.events.emit(tx, { type: "contest.opened", data: { contest_id: contestId } });
+  });
 }
 
 export async function closeContest(ctx: Ctx, contestId: string) {
-  const r = await ctx.db.query("UPDATE contests SET state='closed' WHERE id=$1 AND state='open' RETURNING id", [contestId]);
-  if (!r.length) return fail("bad_state", "Contest is not open", 409);
-  await ctx.log.append({ type: "contest.closed", data: { contest_id: contestId } });
+  await ctx.commit(async (tx) => {
+    const r = await tx.query("UPDATE contests SET state='closed' WHERE id=$1 AND state='open' RETURNING id", [contestId]);
+    if (!r.length) return fail("bad_state", "Contest is not open", 409);
+    await ctx.events.emit(tx, { type: "contest.closed", data: { contest_id: contestId } });
+  });
 }
 
 export { logRef };

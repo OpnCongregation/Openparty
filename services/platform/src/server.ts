@@ -41,7 +41,12 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
     return reply.send(await fn(a, req));
   };
 
-  app.get("/healthz", async () => ({ status: "ok" }));
+  // "degraded" = committed events are waiting too long to reach the public log (the log is down or refusing them).
+  app.get("/healthz", async () => {
+    const outbox = await ctx.events.stats();
+    const late = outbox.oldestPendingSeconds !== null && outbox.oldestPendingSeconds > 60;
+    return { status: late ? "degraded" : "ok", outbox };
+  });
 
   // USSD gateway webhook (Africa's Talking format): authenticated, validated and rate limited. See ussd-guard.ts.
   registerUssd(app, ctx, opts.ussd ?? {});
