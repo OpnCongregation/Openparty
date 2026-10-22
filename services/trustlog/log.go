@@ -1,13 +1,16 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -37,49 +40,120 @@ type Log struct {
 	leaves  [][]byte
 	priv    ed25519.PrivateKey
 	path    string
+	// Recovered is the number of bytes of a torn final record dropped when the file was opened (0 = file was clean).
+	Recovered int64
 }
 
+// Durability: Append returns success only after the record is written AND fsynced, so an acknowledged entry survives a
+// crash or power loss (to the extent the storage honours fsync). A crash in the middle of an append leaves at most one
+// torn final record, which OpenLog detects and drops; that record was never acknowledged. Damage anywhere before the
+// final record cannot come from a torn append, so it is refused instead of repaired.
 func OpenLog(path string, priv ed25519.PrivateKey) (*Log, error) {
 	l := &Log{priv: priv, path: path}
 	if path == "" {
 		return l, nil
 	}
-	f, err := os.Open(path)
+	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return l, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 16<<20)
-	for sc.Scan() {
-		b, err := base64.StdEncoding.DecodeString(sc.Text())
-		if err != nil {
-			return nil, fmt.Errorf("corrupt log file: %w", err)
+	good := 0 // bytes of fully valid, newline-terminated records
+	for good < len(raw) {
+		nl := bytes.IndexByte(raw[good:], '\n')
+		if nl < 0 {
+			break // unterminated tail: a write that never finished
+		}
+		b, derr := base64.StdEncoding.DecodeString(string(raw[good : good+nl]))
+		if derr == nil && nl == 0 {
+			derr = errors.New("empty record") // Append never writes one
+		}
+		if derr != nil {
+			if good+nl+1 == len(raw) {
+				break // undecodable FINAL record: also a torn write
+			}
+			return nil, fmt.Errorf("corrupt log file at byte %d (not the final record, so not a torn write): %w", good, derr)
 		}
 		l.entries = append(l.entries, b)
 		l.leaves = append(l.leaves, hashLeaf(b))
+		good += nl + 1
 	}
-	return l, sc.Err()
+	if good < len(raw) {
+		l.Recovered = int64(len(raw) - good)
+		log.Printf("trustlog: dropped %d bytes of an incomplete final record in %s (never acknowledged)", l.Recovered, path)
+		if err := os.Truncate(path, int64(good)); err != nil {
+			return nil, fmt.Errorf("cannot repair log file: %w", err)
+		}
+		if err := syncFile(path); err != nil {
+			return nil, err
+		}
+	}
+	return l, nil
+}
+
+func syncFile(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
+}
+
+// syncDir makes a newly created file's directory entry durable. Not supported on every OS (e.g. Windows), so best effort.
+func syncDir(dir string) {
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
+}
+
+// persist appends one record and fsyncs it. On any failure the file is cut back to its previous length so a failed
+// append leaves nothing behind that memory does not have.
+func (l *Log) persist(data []byte) error {
+	_, statErr := os.Stat(l.path)
+	isNew := errors.Is(statErr, os.ErrNotExist)
+	f, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	prev, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		f.Close()
+		return err
+	}
+	rollback := func(cause error) error {
+		f.Truncate(prev)
+		f.Close()
+		return cause
+	}
+	line := base64.StdEncoding.EncodeToString(data) + "\n"
+	if n, werr := f.WriteString(line); werr != nil || n != len(line) {
+		if werr == nil {
+			werr = io.ErrShortWrite
+		}
+		return rollback(werr)
+	}
+	if serr := f.Sync(); serr != nil {
+		return rollback(serr)
+	}
+	if cerr := f.Close(); cerr != nil {
+		return cerr
+	}
+	if isNew {
+		syncDir(filepath.Dir(l.path))
+	}
+	return nil
 }
 
 func (l *Log) Append(data []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.path != "" {
-		f, err := os.OpenFile(l.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-		if err != nil {
+		if err := l.persist(data); err != nil {
 			return 0, err
-		}
-		_, werr := f.WriteString(base64.StdEncoding.EncodeToString(data) + "\n")
-		cerr := f.Close()
-		if werr != nil {
-			return 0, werr
-		}
-		if cerr != nil {
-			return 0, cerr
 		}
 	}
 	l.entries = append(l.entries, append([]byte(nil), data...))

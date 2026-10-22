@@ -6,11 +6,17 @@ import * as members from "./members.js";
 import * as contests from "./contests.js";
 import * as finance from "./finance.js";
 import * as participation from "./participation.js";
-import { handleUssd } from "./ussd.js";
+import { registerUssd, type UssdOptions } from "./ussd-guard.js";
 import { registerFramework } from "./framework/api.js";
 
-export function buildServer(ctx: Ctx) {
-  const app = Fastify();
+export interface ServerOptions {
+  ussd?: UssdOptions;
+  /** Believe X-Forwarded-For. Only behind a reverse proxy you control; otherwise callers could forge their address. */
+  trustProxy?: boolean;
+}
+
+export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
+  const app = Fastify({ trustProxy: opts.trustProxy ?? false });
   app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_r, body, done) =>
     done(null, Object.fromEntries(new URLSearchParams(body as string))));
   // Keep the exact body text: admin signatures cover its hash.
@@ -37,12 +43,8 @@ export function buildServer(ctx: Ctx) {
 
   app.get("/healthz", async () => ({ status: "ok" }));
 
-  // USSD gateway webhook (Africa's Talking format)
-  app.post("/ussd", async (req, reply) => {
-    const b = req.body as { phoneNumber: string; text?: string };
-    reply.type("text/plain");
-    return handleUssd(ctx, b.phoneNumber, b.text ?? "");
-  });
+  // USSD gateway webhook (Africa's Talking format): authenticated, validated and rate limited. See ussd-guard.ts.
+  registerUssd(app, ctx, opts.ussd ?? {});
 
   // Ward agent
   app.post("/agent/activate", guarded("member.activate", (a, req) => members.activateMember(ctx, a, req.body).then(() => ({ ok: true }))));
@@ -57,6 +59,7 @@ export function buildServer(ctx: Ctx) {
   app.post("/admin/approvals/:id/approve", guarded("approval.approve", (a, req) => admin.approve(ctx, a, req.params.id)));
   app.post("/admin/gifts", guarded("gift.record", (_a, req) => finance.recordGift(ctx, req.body.payment, req.body.donor)));
   app.get("/admin/finance/donors", guarded("finance.report", () => finance.donorReport(ctx)));
+  app.post("/admin/finance/retry-payments", guarded("finance.retry", () => finance.retryUnrecorded(ctx)));
   app.get("/admin/finance/reconcile", guarded("finance.report", () => finance.reconcile(ctx)));
 
   // Public

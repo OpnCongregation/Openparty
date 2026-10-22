@@ -62,7 +62,25 @@ one-way hash for "one person, one membership". Adapters must pass the public con
 ## Privacy by construction
 
 - Per-member encryption keys; erasure destroys the key (the entry stays, unreadable).
-- The public log refuses personal-data keys (`assertNoPersonalData`).
+- **Log durability.** `Append` returns only after the record is written and fsynced (and the directory, for a new file). A crash
+  mid-append leaves at most one torn final record, which `OpenLog` drops and logs (it was never acknowledged); damage anywhere
+  earlier is refused, not repaired. The log is the single writer: one instance per data directory.
+- **Public API limits.** `/entries` returns at most 1000 entries or about 4 MiB per call with a `next` cursor; proof requests run
+  in at most 8 slots (503 beyond that); each address is rate limited (`RATE_LIMIT_PER_MIN`, default 600); a record over 1 MiB is
+  refused with 413; HTTP servers have read, write and idle timeouts. The limiter keys on the connecting address, so behind a
+  proxy it sees the proxy: limit at the proxy as well.
+- **USSD webhook.** `POST /ussd` exists only when `USSD_WEBHOOK_SECRET` is set, compares it in constant time, optionally checks
+  `USSD_ALLOWED_IPS`, validates the payload and rate limits per address and per phone. `POST /ussd/sim` (no secret) exists only
+  when `LAB_ENABLED=1`. A phone number from the gateway is a claim; PIN attempts are counted atomically (5 per member) because
+  a 4-digit PIN is only as strong as that counter.
+- **Money.** Every dues collection is a `payment_attempts` row written before the provider is called and keyed by the gateway
+  session; the provider receives the same idempotency key on retries. `reconcile` reports payments charged but not recorded,
+  unconfirmed, or refused after being taken; `POST /admin/finance/retry-payments` finishes the first kind.
+- **Approvals** run exactly once: vote, count and the pending to executing claim happen in one transaction under a row lock.
+- Master keys: see [key-management.md](key-management.md).
+- The public log accepts only listed event types with exactly their listed fields, each in a strict shape (`src/logschema.ts`).
+  Free text, nested objects and serialized JSON do not fit a shape. The old key denylist (`assertNoPersonalData`) remains as a second check.
+  A new event type or field must be added to the allowlist before it can be logged.
 - Admin requests are signed with the person's own key; no shared logins, no super admin, no security role.
 - Append-only tables (`finance_ledger`, `rules`, `access_log`, `deployment_config`) are enforced by database triggers.
 

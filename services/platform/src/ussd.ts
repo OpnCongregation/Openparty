@@ -1,8 +1,9 @@
-import type { Ctx } from "./context.js";
+﻿import type { Ctx } from "./context.js";
 import { DomainError } from "./errors.js";
 import { t, tSpecific } from "./i18n.js";
 import { confirmJoin, prepareJoin, verifyPin } from "./members.js";
-import { recordDues } from "./finance.js";
+import { randomUUID } from "node:crypto";
+import { collectDues } from "./finance.js";
 
 const con = (s: string) => `CON ${s}`;
 const end = (s: string) => `END ${s}`;
@@ -12,7 +13,7 @@ const end = (s: string) => `END ${s}`;
  * short-lived ID check held in ctx.pending, so any server instance can answer any step.
  * All wording comes from locales/*.json; the ID prompt follows the deployment's ID adapter.
  */
-export async function handleUssd(ctx: Ctx, phone: string, text: string): Promise<string> {
+export async function handleUssd(ctx: Ctx, phone: string, text: string, sessionId?: string): Promise<string> {
   const s = text === "" ? [] : text.split("*");
   const cur = ctx.config.pack.currency;
   try {
@@ -41,9 +42,11 @@ export async function handleUssd(ctx: Ctx, phone: string, text: string): Promise
       if (s.length === 2) return con(t(ctx, "ussd.amount", cur.code));
       const units = Number(s[2]);
       if (!Number.isInteger(units) || units <= 0) return end(t(ctx, "ussd.bad"));
-      const pay = await ctx.payments.charge(phone, units * cur.minor_per_unit);
-      await recordDues(ctx, m.id, pay);
-      await ctx.sms.send(phone, t(ctx, "sms.dues", cur.symbol, units, pay.ref));
+      // The gateway repeats sessionId on every step of one dial, so a repeated final request maps to the same key and
+      // cannot charge twice. The key is a keyed hash: the PIN inside `text` must never be stored or logged in the clear.
+      const key = sessionId ? ctx.keys.lookupHash("pay", `${sessionId}|${phone}|${text}`) : randomUUID();
+      const r = await collectDues(ctx, m.id, phone, units * cur.minor_per_unit, key);
+      if (!r.duplicate) await ctx.sms.send(phone, t(ctx, "sms.dues", cur.symbol, units, r.payment.ref));
       return end(t(ctx, "ussd.paid", cur.symbol, units));
     }
 

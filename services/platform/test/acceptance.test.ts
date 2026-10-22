@@ -1,4 +1,4 @@
-import { loadDefaultConfig } from "../src/framework/config.js";
+﻿import { loadDefaultConfig } from "../src/framework/config.js";
 import { describe, expect, it } from "vitest";
 import { ROLES, approve, can, propose } from "../src/admin.js";
 import { assertNoPersonalData } from "../src/adapters.js";
@@ -198,26 +198,26 @@ describe("Register freeze and contest gate (s.77(4)-(7))", () => {
 describe("Rules lock once a notice is out", () => {
   it("setRule works before notice and fails after, until the contest closes", async () => {
     const { ctx } = await setup();
-    await contests.setRule(ctx, "dues.min_payment_minor", 20_000, "sec");
+    await contests.setRule(ctx, "dues.min_payment_minor", 20_000, "00000000-0000-4000-8000-000000000001");
     expect(await contests.getRule(ctx, "dues.min_payment_minor")).toBe(20_000);
     const cid = await contests.createContest(ctx, { name: "R", primaryType: "direct", mode: "virtual", voteDate: new Date(ctx.clock().getTime() + 30 * DAY) });
     await contests.generateNotice(ctx, cid);
-    await expect(contests.setRule(ctx, "dues.min_payment_minor", 1, "sec")).rejects.toMatchObject({ code: "rules_locked" });
+    await expect(contests.setRule(ctx, "dues.min_payment_minor", 1, "00000000-0000-4000-8000-000000000001")).rejects.toMatchObject({ code: "rules_locked" });
   });
   it("rule history is append-only at the database level", async () => {
     const { ctx } = await setup();
-    await contests.setRule(ctx, "dues.min_payment_minor", 20_000, "sec");
+    await contests.setRule(ctx, "dues.min_payment_minor", 20_000, "00000000-0000-4000-8000-000000000001");
     await expect(ctx.db.query("UPDATE rules SET value='1'")).rejects.toThrow(/immutable/);
     await expect(ctx.db.query("DELETE FROM rules")).rejects.toThrow(/immutable/);
   });
   it("has no rule that could add aspirant criteria (s.85)", async () => {
     const { ctx } = await setup();
     for (const k of ["min_membership_months", "aspirant_exam_score", "covenant_score_min", "min_rating"])
-      await expect(contests.setRule(ctx, k, 1, "sec")).rejects.toMatchObject({ code: "unknown_rule" });
+      await expect(contests.setRule(ctx, k, 1, "00000000-0000-4000-8000-000000000001")).rejects.toMatchObject({ code: "unknown_rule" });
   });
   it("donor cap cannot be set above the legal N500m", async () => {
     const { ctx } = await setup();
-    await expect(contests.setRule(ctx, "finance.cap_per_donor_minor", 500_000_001 * 100, "sec")).rejects.toMatchObject({ code: "invalid_rule" });
+    await expect(contests.setRule(ctx, "finance.cap_per_donor_minor", 500_000_001 * 100, "00000000-0000-4000-8000-000000000001")).rejects.toMatchObject({ code: "invalid_rule" });
   });
 });
 
@@ -236,7 +236,7 @@ describe("Finance: s.94, s.89, Reg 44", () => {
   });
   it("per-donor cap is cumulative and never exceeds the legal ceiling", async () => {
     const { ctx } = await setup();
-    await contests.setRule(ctx, "finance.cap_per_donor_minor", 100_000_000, "sec"); // N1m
+    await contests.setRule(ctx, "finance.cap_per_donor_minor", 100_000_000, "00000000-0000-4000-8000-000000000001"); // N1m
     await finance.recordGift(ctx, NGN(600_000), donor);
     await expect(finance.recordGift(ctx, NGN(500_000), donor)).rejects.toMatchObject({ code: "over_cap" });
     await expect(finance.recordGift(ctx, NGN(400_000), donor)).resolves.toBeDefined();
@@ -412,8 +412,8 @@ describe("HTTP: signed admin requests", () => {
   });
   it("USSD webhook accepts form-encoded gateway posts", async () => {
     const { ctx } = await setup();
-    const app = buildServer(ctx);
-    const r = await app.inject({ method: "POST", url: "/ussd", headers: { "content-type": "application/x-www-form-urlencoded" }, payload: "sessionId=1&phoneNumber=%2B2348000000099&text=" });
+    const app = buildServer(ctx, { ussd: { secret: "test-secret-0123456789" } });
+    const r = await app.inject({ method: "POST", url: "/ussd", headers: { "content-type": "application/x-www-form-urlencoded", "x-ussd-secret": "test-secret-0123456789" }, payload: "sessionId=1&phoneNumber=%2B2348000000099&text=" });
     expect(r.statusCode).toBe(200);
     expect(r.body).toMatch(/^CON /);
   });

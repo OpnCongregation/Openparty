@@ -53,10 +53,13 @@ CREATE TABLE IF NOT EXISTS approvals (
   action TEXT NOT NULL,
   payload TEXT NOT NULL,
   proposer TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','executed','failed')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','executing','executed','failed')),
   result TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- 'executing' is the claim taken by the one request that runs the action (older databases lack it in the CHECK).
+ALTER TABLE approvals DROP CONSTRAINT IF EXISTS approvals_status_check;
+ALTER TABLE approvals ADD CONSTRAINT approvals_status_check CHECK (status IN ('pending','executing','executed','failed'));
 CREATE TABLE IF NOT EXISTS approval_votes (
   approval_id TEXT NOT NULL, admin_id TEXT NOT NULL, PRIMARY KEY (approval_id, admin_id)
 );
@@ -105,6 +108,19 @@ CREATE TABLE IF NOT EXISTS finance_ledger (
   occurred_at TIMESTAMPTZ         -- the deployment clock when recorded (virtual in tests); used for rolling-window caps
 );
 ALTER TABLE finance_ledger ADD COLUMN IF NOT EXISTS occurred_at TIMESTAMPTZ;
+-- One row per attempt to collect money, written BEFORE the provider is called. 'charging' = outcome unknown,
+-- 'charged' = provider confirmed but the ledger has no row yet, 'refund_due' = money taken and refused by a rule.
+CREATE TABLE IF NOT EXISTS payment_attempts (
+  key TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL,
+  amount_minor BIGINT NOT NULL CHECK (amount_minor > 0),
+  state TEXT NOT NULL CHECK (state IN ('charging','charged','recorded','refund_due')),
+  ref TEXT, currency TEXT, country TEXT,
+  ledger_id BIGINT,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS quarantine (
   id BIGSERIAL PRIMARY KEY, reason TEXT NOT NULL, amount_minor BIGINT, external_ref TEXT, at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

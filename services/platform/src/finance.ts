@@ -1,8 +1,8 @@
-import type { Ctx } from "./context.js";
+﻿import type { Ctx } from "./context.js";
 import { logRef } from "./context.js";
 import type { IncomingPayment } from "./adapters.js";
 import { getRule } from "./contests.js";
-import { fail } from "./errors.js";
+import { DomainError, fail } from "./errors.js";
 
 export interface Donor {
   name: string;
@@ -35,15 +35,97 @@ async function insertLedger(ctx: Ctx, row: {
   }
 }
 
-export async function recordDues(ctx: Ctx, memberId: string, p: IncomingPayment) {
-  await rejectForeign(ctx, p);
+/** Rules that can be checked before any money moves. */
+async function checkDuesAllowed(ctx: Ctx, memberId: string, amountMinor: number) {
   const m = await ctx.db.query<{ state: string }>("SELECT state FROM members WHERE id=$1", [memberId]);
   if (!m.length || !["provisional", "active"].includes(m[0].state)) return fail("not_member", "Dues need a current member", 403);
   const min = await getRule<number>(ctx, "dues.min_payment_minor");
-  if (p.amountMinor < min) return fail("dues_too_low", `Minimum dues is ${min} ${ctx.config.pack.currency.minor_unit}`, 422);
+  if (amountMinor < min) return fail("dues_too_low", `Minimum dues is ${min} ${ctx.config.pack.currency.minor_unit}`, 422);
+}
+
+export async function recordDues(ctx: Ctx, memberId: string, p: IncomingPayment) {
+  await rejectForeign(ctx, p);
+  await checkDuesAllowed(ctx, memberId, p.amountMinor);
   const id = await insertLedger(ctx, { kind: "dues", amountMinor: p.amountMinor, memberId, ref: p.ref });
   await ctx.log.append({ type: "finance.dues", data: { ledger_id: id, amount_minor: p.amountMinor, member_ref: logRef(ctx, "member", memberId) } });
   return { ledgerId: id };
+}
+
+interface Attempt { key: string; member_id: string; amount_minor: number; state: string; ref: string | null; currency: string | null; country: string | null; ledger_id: number | null; error: string | null }
+
+const setAttempt = (ctx: Ctx, key: string, state: string, extra: { ref?: string; currency?: string; country?: string; ledgerId?: number; error?: string | null } = {}) =>
+  ctx.db.query(
+    `UPDATE payment_attempts SET state=$2, ref=COALESCE($3,ref), currency=COALESCE($4,currency), country=COALESCE($5,country),
+       ledger_id=COALESCE($6,ledger_id), error=$7, updated_at=now() WHERE key=$1`,
+    [key, state, extra.ref ?? null, extra.currency ?? null, extra.country ?? null, extra.ledgerId ?? null, extra.error ?? null]);
+
+/** Record a confirmed payment and move its attempt to its final state. Safe to repeat: the ledger's external_ref is unique. */
+async function settle(ctx: Ctx, a: Pick<Attempt, "key" | "member_id">, p: IncomingPayment): Promise<{ ledgerId: number }> {
+  try {
+    const r = await recordDues(ctx, a.member_id, p);
+    await setAttempt(ctx, a.key, "recorded", { ledgerId: r.ledgerId });
+    return r;
+  } catch (e: any) {
+    if (e instanceof DomainError && e.code === "duplicate_payment") {
+      // A previous run recorded it but died before updating the attempt: adopt the existing ledger row.
+      const row = await ctx.db.query<{ id: number }>("SELECT id::int AS id FROM finance_ledger WHERE external_ref=$1", [p.ref]);
+      if (row.length) {
+        await setAttempt(ctx, a.key, "recorded", { ledgerId: row[0].id });
+        return { ledgerId: row[0].id };
+      }
+    }
+    // A rule refused money that the provider already took: it must be refunded, so keep it visible rather than lost.
+    if (e instanceof DomainError) await setAttempt(ctx, a.key, "refund_due", { error: `${e.code}: ${e.message}` });
+    // Anything else (database down, crash) leaves 'charged' so retryUnrecorded can finish the job.
+    throw e;
+  }
+}
+
+/**
+ * Collect dues exactly once per idempotency key. The attempt is written before the provider is called, the provider gets
+ * the same key on every retry, and the ledger row is keyed by the provider's reference, so a repeated request, a timeout
+ * or a crash between "charged" and "recorded" can neither charge twice nor lose the payment.
+ */
+export async function collectDues(ctx: Ctx, memberId: string, phone: string, amountMinor: number, key: string) {
+  await checkDuesAllowed(ctx, memberId, amountMinor);
+  await ctx.db.query(
+    "INSERT INTO payment_attempts(key,member_id,amount_minor,state) VALUES ($1,$2,$3,'charging') ON CONFLICT (key) DO NOTHING", [key, memberId, amountMinor]);
+  const a = (await ctx.db.query<Attempt>("SELECT * FROM payment_attempts WHERE key=$1", [key]))[0];
+  if (a.member_id !== memberId || Number(a.amount_minor) !== amountMinor) return fail("key_reuse", "That payment key was used for a different payment", 409);
+  if (a.state === "recorded") return { ledgerId: a.ledger_id as number, amountMinor, duplicate: true as const };
+  if (a.state === "refund_due") return fail("refund_due", a.error ?? "Payment was taken and refused; a refund is due", 422);
+
+  let p: IncomingPayment;
+  if (a.state === "charged" && a.ref) {
+    p = { ref: a.ref, amountMinor, currency: a.currency ?? "", country: a.country ?? "" };
+  } else {
+    try {
+      p = await ctx.payments.charge(phone, amountMinor, key);
+    } catch (e: any) {
+      // Outcome unknown: stay in 'charging' (reported by reconcile) and ask the person to try again. The same key makes a retry safe.
+      await setAttempt(ctx, key, "charging", { error: String(e?.message ?? e).slice(0, 200) });
+      return fail("payment_unconfirmed", "We could not confirm the payment. You have not been charged twice; try again shortly.", 502);
+    }
+    await setAttempt(ctx, key, "charged", { ref: p.ref, currency: p.currency, country: p.country });
+  }
+  const r = await settle(ctx, a, p);
+  return { ledgerId: r.ledgerId, payment: p, amountMinor, duplicate: false as const };
+}
+
+/** Finish payments the provider confirmed but the ledger never got (crash or outage between the two). */
+export async function retryUnrecorded(ctx: Ctx) {
+  const rows = await ctx.db.query<Attempt>("SELECT * FROM payment_attempts WHERE state='charged' ORDER BY created_at");
+  const out = { recorded: 0, refundDue: 0, stillFailing: 0 };
+  for (const a of rows) {
+    try {
+      await settle(ctx, a, { ref: a.ref as string, amountMinor: Number(a.amount_minor), currency: a.currency ?? "", country: a.country ?? "" });
+      out.recorded++;
+    } catch (e) {
+      if (e instanceof DomainError) out.refundDue++;
+      else out.stillFailing++;
+    }
+  }
+  return out;
 }
 
 /**
@@ -90,6 +172,9 @@ export async function reconcile(ctx: Ctx) {
     "SELECT kind, SUM(amount_minor)::float8 AS total, COUNT(*)::int AS n FROM finance_ledger GROUP BY kind");
   const byKind = Object.fromEntries(t.map((r) => [r.kind, { totalMinor: r.total, count: r.n }]));
   const giftsInReport = (await donorReport(ctx)).reduce((s, r) => s + r.amountMinor, 0);
-  const ok = giftsInReport === (byKind.gift?.totalMinor ?? 0);
-  return { byKind, giftsInReportMinor: giftsInReport, reconciled: ok };
+  const unsettled = await ctx.db.query<{ state: string; n: number; total: number }>(
+    "SELECT state, COUNT(*)::int AS n, COALESCE(SUM(amount_minor),0)::float8 AS total FROM payment_attempts WHERE state <> 'recorded' GROUP BY state");
+  const unsettledPayments = Object.fromEntries(unsettled.map((r) => [r.state, { count: r.n, totalMinor: r.total }]));
+  const ok = giftsInReport === (byKind.gift?.totalMinor ?? 0) && unsettled.length === 0;
+  return { byKind, giftsInReportMinor: giftsInReport, unsettledPayments, reconciled: ok };
 }

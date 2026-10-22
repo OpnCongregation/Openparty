@@ -102,18 +102,24 @@ func (w *Witness) sync() error {
 			return fmt.Errorf("TAMPER: history rewritten: %v", err)
 		}
 	}
-	var er struct {
-		Entries []string `json:"entries"`
-	}
-	if err := w.getJSON(fmt.Sprintf("/entries?from=%d&to=%d", old, h.Size), &er); err != nil {
-		return err
-	}
-	for _, e := range er.Entries {
-		b, err := base64.StdEncoding.DecodeString(e)
-		if err != nil {
+	// The log serves entries in pages; keep asking until we hold everything up to the head we verified.
+	for w.copy.Size() < h.Size {
+		var er struct {
+			Entries []string `json:"entries"`
+		}
+		if err := w.getJSON(fmt.Sprintf("/entries?from=%d&to=%d", w.copy.Size(), h.Size), &er); err != nil {
 			return err
 		}
-		w.copy.Append(b)
+		if len(er.Entries) == 0 {
+			return fmt.Errorf("log returned no entries at %d although its head says %d", w.copy.Size(), h.Size)
+		}
+		for _, e := range er.Entries {
+			b, err := base64.StdEncoding.DecodeString(e)
+			if err != nil {
+				return err
+			}
+			w.copy.Append(b)
+		}
 	}
 	got, _ := w.copy.RootAt(w.copy.Size())
 	if hex.EncodeToString(got) != h.Root {

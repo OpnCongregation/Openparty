@@ -111,17 +111,16 @@ export async function activateMember(ctx: Ctx, agent: { id: string; role: string
 
 /** PIN check with lockout; PINs are only 4 digits, so the attempt counter is the real protection. */
 export async function verifyPin(ctx: Ctx, phone: string, pin: string) {
-  const rows = await ctx.db.query<{ id: string; state: string; pin_hash: string; pin_failures: number; card_no: string }>(
-    "SELECT id,state,pin_hash,pin_failures,card_no FROM members WHERE phone_hash=$1 AND state IN ('provisional','active')",
+  const rows = await ctx.db.query<{ id: string; state: string; pin_hash: string; card_no: string }>(
+    "SELECT id,state,pin_hash,card_no FROM members WHERE phone_hash=$1 AND state IN ('provisional','active')",
     [ctx.keys.lookupHash("phone", phone)],
   );
   if (!rows.length) return fail("no_member", "No membership for this phone", 404);
   const m = rows[0];
-  if (m.pin_failures >= MAX_PIN_FAILURES) return fail("pin_locked", "PIN locked; see your ward agent", 423);
-  if (!checkPin(pin, m.pin_hash)) {
-    await ctx.db.query("UPDATE members SET pin_failures=pin_failures+1 WHERE id=$1", [m.id]);
-    return fail("pin_wrong", "Wrong PIN", 401);
-  }
+  // Take an attempt slot atomically BEFORE comparing, so parallel guesses cannot all pass a stale "failures < 5" check.
+  const slot = await ctx.db.query("UPDATE members SET pin_failures=pin_failures+1 WHERE id=$1 AND pin_failures < $2 RETURNING id", [m.id, MAX_PIN_FAILURES]);
+  if (!slot.length) return fail("pin_locked", "PIN locked; see your ward agent", 423);
+  if (!checkPin(pin, m.pin_hash)) return fail("pin_wrong", "Wrong PIN", 401);
   await ctx.db.query("UPDATE members SET pin_failures=0 WHERE id=$1", [m.id]);
   return { id: m.id, state: m.state, cardNo: m.card_no };
 }

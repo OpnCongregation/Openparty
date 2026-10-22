@@ -1,4 +1,5 @@
 import { canonical } from "./crypto.js";
+import { assertLoggable } from "./logschema.js";
 
 // ---- Identity adapters ------------------------------------------------------------------------
 // Every country plugs its own ID system into the core through this one interface. The core learns only whether the
@@ -80,7 +81,8 @@ export interface TrustLog {
   append(e: LogEvent): Promise<{ index: number }>;
 }
 
-// No personal data may reach the public log. Keys that smell like PII are refused outright.
+// No personal data may reach the public log. The real guard is the allowlist in logschema.ts (listed event types, exact
+// fields, strict value shapes). This key denylist stays as a second, independent check.
 const FORBIDDEN = /(^|_)(name|nin|phone|address|dob|email|photo|sex|pin)($|_)/i;
 
 export function assertNoPersonalData(v: unknown, path = "data"): void {
@@ -93,10 +95,15 @@ export function assertNoPersonalData(v: unknown, path = "data"): void {
   }
 }
 
+export function assertPublicLogSafe(e: LogEvent): void {
+  assertLoggable(e);
+  assertNoPersonalData(e.data);
+}
+
 export class HttpTrustLog implements TrustLog {
   constructor(private url: string, private token: string) {}
   async append(e: LogEvent) {
-    assertNoPersonalData(e.data);
+    assertPublicLogSafe(e);
     const body = canonical({ ...e, at: new Date().toISOString() });
     const r = await fetch(`${this.url.replace(/\/$/, "")}/append`, {
       method: "POST",
@@ -112,7 +119,7 @@ export class HttpTrustLog implements TrustLog {
 export class MemoryTrustLog implements TrustLog {
   events: (LogEvent & { index: number })[] = [];
   async append(e: LogEvent) {
-    assertNoPersonalData(e.data);
+    assertPublicLogSafe(e);
     const index = this.events.length;
     this.events.push({ ...e, index });
     return { index };
@@ -120,15 +127,24 @@ export class MemoryTrustLog implements TrustLog {
 }
 
 export interface Payments {
-  /** Ask the payment provider to charge the phone's wallet or bank; returns the settled payment. */
-  charge(phone: string, amountMinor: number): Promise<IncomingPayment>;
+  /**
+   * Ask the payment provider to charge the phone's wallet or bank; returns the settled payment.
+   * `idempotencyKey` is a contract: calling again with the same key must return the same payment and never charge twice.
+   * A real adapter must pass it to the provider's own idempotency mechanism.
+   */
+  charge(phone: string, amountMinor: number, idempotencyKey?: string): Promise<IncomingPayment>;
 }
 
 export class SimPayments implements Payments {
   n = 0;
+  private byKey = new Map<string, IncomingPayment>();
   /** Simulated payer: a domestic account in the deployment's own currency unless told otherwise. */
   constructor(private currency = "NGN", private country = "NG") {}
-  async charge(_phone: string, amountMinor: number): Promise<IncomingPayment> {
-    return { ref: `SIM-${Date.now()}-${++this.n}`, amountMinor, currency: this.currency, country: this.country };
+  async charge(_phone: string, amountMinor: number, idempotencyKey?: string): Promise<IncomingPayment> {
+    const seen = idempotencyKey ? this.byKey.get(idempotencyKey) : undefined;
+    if (seen) return seen;
+    const p = { ref: `SIM-${Date.now()}-${++this.n}`, amountMinor, currency: this.currency, country: this.country };
+    if (idempotencyKey) this.byKey.set(idempotencyKey, p);
+    return p;
   }
 }

@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 const PLATFORM = process.env.NEXT_PUBLIC_PLATFORM_URL ?? "http://localhost:3000";
 
@@ -10,14 +10,18 @@ export default function Ussd() {
   const [input, setInput] = useState("");
   const [live, setLive] = useState(false);
   const [err, setErr] = useState("");
+  const session = useRef("");
 
   async function send(next: string[]) {
     setErr("");
     try {
-      const r = await fetch(`${PLATFORM}/ussd`, {
+      // A new dial gets a new gateway session id; the platform uses it so a repeated final request cannot pay twice.
+      if (next.length === 0 || !session.current) session.current = `sim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // /ussd/sim is the demo route (platform LAB_ENABLED=1). The real /ussd needs the gateway's secret, which a browser must never hold.
+      const r = await fetch(`${PLATFORM}/ussd/sim`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ sessionId: "sim", phoneNumber: phone, text: next.join("*") }),
+        body: new URLSearchParams({ sessionId: session.current, phoneNumber: phone, text: next.join("*") }),
       });
       const t = await r.text();
       setScreen(t.replace(/^(CON|END) /, ""));

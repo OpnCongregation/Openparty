@@ -4,6 +4,24 @@ All notable changes. This project uses [semantic versioning](https://semver.org/
 
 ## 0.2.0 (unreleased)
 
+### Security
+- The public-log guard is now an allowlist: listed event types, exact fields, strict value shapes (`logschema.ts`). Serialized
+  personal data inside a string field, unlisted field names and unknown event types are refused. 8 adversarial tests added.
+- `docker-compose.yml` publishes the log, platform and portal ports on `127.0.0.1` only.
+- **USSD webhook authenticated** (`USSD_WEBHOOK_SECRET`, optional `USSD_ALLOWED_IPS`), payload-validated and rate limited; the
+  platform refuses to start without the secret unless `LAB_ENABLED=1`. The browser simulator uses a separate `/ussd/sim` that only
+  exists in lab mode. PIN attempts are now counted atomically.
+- **Approvals execute once** under concurrency (row lock plus an atomic pending to executing claim).
+- **Trust log durability:** fsync before acknowledging, torn final record recovered, earlier damage refused; an oversized record is
+  now refused with 413 instead of being silently truncated.
+- **Trust log limits:** paged `/entries` (1000 entries / 4 MiB, `next` cursor), bounded proof work, per-address rate limit, HTTP
+  timeouts, cached cosignatures. The witness pages through entries.
+- **Payments:** idempotency keys, a `payment_attempts` table, reconciliation of unrecorded/unconfirmed/refund-due payments and a
+  retry route. `Payments.charge` takes an idempotency key (adapters must honour it).
+- **Key lifecycle:** master key ring with ids (`MASTER_KEYS`), `KeyProvider` interface, `npm run rotate-keys`, production guard for
+  software keys, `docs/key-management.md`. Existing data keeps opening (the single key is `k0`).
+- README states plainly that this is not an electronic voting system.
+
 ### Added
 - **Three layers on an international floor.** Floor v1.0 (F1 to F12), a country law pack format with citations, and party settings
   checked against the pack ("a party can tighten the law, never loosen it").

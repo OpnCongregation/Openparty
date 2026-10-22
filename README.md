@@ -8,6 +8,10 @@ important action leaves a public, tamper-evident trace. Joining, paying dues and
 > **Status: pre-release reference implementation, open for public review.** It has had no independent security audit, and several
 > parts are simulated (national ID checks, SMS, payments, the hardware key store). The Nigeria law pack is a **draft that has not been
 > reviewed by counsel** and nothing here is legal advice. Do not run it for real members. See [Honest status](#honest-status).
+>
+> **This is not an electronic voting system.** Voting, ballot secrecy, one-member-one-vote at the ballot, tallying and coercion
+> resistance are not built. The signed log shows that recorded events were not altered; it does not prove who voted, that ballots
+> were secret, or that a count was right. Do not present it as production-ready for any real election.
 
 ## The idea: three layers on an international floor
 
@@ -55,13 +59,15 @@ Open the portal after starting the stack (below):
 
 ```
 cp .env.example .env     # then fill the keys: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+                         # also set USSD_WEBHOOK_SECRET (16+ chars): the USSD webhook refuses callers that do not send it,
+                         # and the platform will not start without it unless LAB_ENABLED=1 (demo; then only /ussd/sim works)
 docker compose build
 LOG_KEY=x docker compose up -d trustlog    # the log makes its key on first start; LOG_KEY is a placeholder here
 docker logs openparty-trustlog-1           # copy key=<hex> and set it as LOG_KEY in .env
 docker compose up -d                       # witnesses can now start
 ```
 
-Ports: log 8080, platform 3000, portal 3001. The Rules lab and Test results need `LAB_ENABLED=1` in `.env`; leave it at `0` outside demos.
+Ports: log 8080, platform 3000, portal 3001. In `docker-compose.yml` these are published on `127.0.0.1` only. To serve other machines, put a TLS-terminating reverse proxy in front and expose only the routes it needs (never the admin routes, the log's append endpoint or the lab); do not simply change the bind address. The Rules lab and Test results need `LAB_ENABLED=1` in `.env`; leave it at `0` outside demos.
 Data lives in named volumes; `docker compose down` keeps it, `down -v` wipes it (and the log key). Two witnesses on one host are a demo only.
 
 ### Without Docker

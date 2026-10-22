@@ -6,14 +6,21 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
 func env(k, d string) string {
 	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
+}
+
+func envInt(k string, d int) int {
+	if v, err := strconv.Atoi(os.Getenv(k)); err == nil && v > 0 {
 		return v
 	}
 	return d
@@ -84,12 +91,14 @@ func main() {
 			log.Fatal("ANCHOR_MODE must be simulated or opentimestamps")
 		}
 		fmt.Printf("trustlog log=%s size=%d key=%x\n", addr, l.Size(), priv.Public())
-		log.Fatal(http.ListenAndServe(addr, s.Routes()))
+		s.limiter = newIPLimiter(envInt("RATE_LIMIT_PER_MIN", 600), envInt("RATE_LIMIT_BURST", 120))
+		log.Fatal(newHTTPServer(addr, s.Routes()).ListenAndServe())
 	case "witness":
 		w := NewWitness(loadKey(data+"/witness.key"), os.Getenv("LOG_URL"), os.Getenv("LOG_KEY"))
 		go w.Run(time.Second)
 		fmt.Printf("trustlog witness=%s key=%x\n", addr, w.pub())
-		log.Fatal(http.ListenAndServe(addr, w.Routes()))
+		lim := newIPLimiter(envInt("RATE_LIMIT_PER_MIN", 600), envInt("RATE_LIMIT_BURST", 120))
+		log.Fatal(newHTTPServer(addr, lim.limit(w.Routes())).ListenAndServe())
 	default:
 		log.Fatalf("unknown mode %q (use log|witness)", mode)
 	}

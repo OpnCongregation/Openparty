@@ -1,4 +1,4 @@
-import { PGlite } from "@electric-sql/pglite";
+﻿import { PGlite } from "@electric-sql/pglite";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SimPayments, MemoryTrustLog, SimSms } from "../src/adapters.js";
@@ -79,13 +79,13 @@ describe("same core, different law pack: Testland (synthetic)", () => {
 describe("tighten, never loosen, at run time", () => {
   it("a party can lower the donor cap but not raise it above the law, and the refusal cites the rule", async () => {
     const { ctx } = await setup();
-    await expect(contests.setRule(ctx, "finance.cap_per_donor_minor", 500_000_000, "sec")).resolves.toBeUndefined();
-    await expect(contests.setRule(ctx, "finance.cap_per_donor_minor", 50_000_000_001, "sec")).rejects.toMatchObject({ code: "invalid_rule", message: expect.stringMatching(/NG-FIN-02/) });
+    await expect(contests.setRule(ctx, "finance.cap_per_donor_minor", 500_000_000, "00000000-0000-4000-8000-000000000001")).resolves.toBeUndefined();
+    await expect(contests.setRule(ctx, "finance.cap_per_donor_minor", 50_000_000_001, "00000000-0000-4000-8000-000000000001")).rejects.toMatchObject({ code: "invalid_rule", message: expect.stringMatching(/NG-FIN-02/) });
   });
   it("only editable rules can be changed at run time; legal parameters cannot", async () => {
     const { ctx } = await setup();
     for (const k of ["notice.days_before_contest", "finance.anonymous_gifts_allowed", "eligibility.party_criteria_allowed", "made.up"])
-      await expect(contests.setRule(ctx, k, 1, "sec")).rejects.toMatchObject({ code: "unknown_rule" });
+      await expect(contests.setRule(ctx, k, 1, "00000000-0000-4000-8000-000000000001")).rejects.toMatchObject({ code: "unknown_rule" });
   });
   it("the contest notice commits to the three layers, not just the editable rules", async () => {
     const a = await setup();

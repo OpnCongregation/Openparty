@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { openDb } from "./db.js";
-import { KeyStore } from "./crypto.js";
+import { KeyStore, type KeyProvider } from "./crypto.js";
 import type { Ctx } from "./context.js";
 import { MemoryTrustLog, SimNgNinAdapter, SimPayments, SimSms, type IdAdapter, type Payments, type Sms, type TrustLog } from "./adapters.js";
 import { buildConfig, loadDefaultConfig } from "./framework/config.js";
@@ -9,6 +9,8 @@ import type { Config } from "./framework/types.js";
 export interface PlatformOptions {
   databaseUrl?: string;
   masterKeyHex?: string;
+  /** Overrides masterKeyHex: a key ring or an HSM/KMS-backed provider. */
+  keyProvider?: KeyProvider;
   pepperHex?: string;
   log?: TrustLog;
   /** Floor + law pack + party settings. Defaults to the bundled reference configuration. */
@@ -35,7 +37,7 @@ export async function createCtx(o: PlatformOptions = {}): Promise<Ctx> {
   const key = (hex: string | undefined) => (hex ? Buffer.from(hex, "hex") : randomBytes(32));
   return {
     db,
-    keys: new KeyStore(db, key(o.masterKeyHex), key(o.pepperHex)),
+    keys: new KeyStore(db, o.keyProvider ?? key(o.masterKeyHex), key(o.pepperHex)),
     config,
     idAdapter,
     sms: o.sms ?? new SimSms(),

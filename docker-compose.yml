@@ -20,8 +20,10 @@ services:
       WITNESS_URLS: http://witness1:8080,http://witness2:8080
       ANCHOR_MODE: ${ANCHOR_MODE:-simulated}
       OTS_CALENDARS: ${OTS_CALENDARS:-}
+      RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-600}
     volumes: [logdata:/data]
-    ports: ["8080:8080"]
+    # Loopback only. Services reach the log over the compose network. To publish it, put a TLS reverse proxy in front.
+    ports: ["127.0.0.1:8080:8080"]
 
   # Two witnesses on one host is for demonstration only. Real witnesses are run by independent parties.
   witness1:
@@ -39,19 +41,30 @@ services:
     build: { context: ., dockerfile: services/platform/Dockerfile }
     environment:
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/openparty
-      MASTER_KEY_HEX: ${MASTER_KEY_HEX:?set in .env}
+      MASTER_KEY_HEX: ${MASTER_KEY_HEX:-}
       PEPPER_HEX: ${PEPPER_HEX:?set in .env}
       TRUSTLOG_URL: http://trustlog:8080
       APPEND_TOKEN: ${APPEND_TOKEN}
       LAB_ENABLED: ${LAB_ENABLED:-0}
+      NODE_ENV: production
+      # The USSD webhook only runs for a caller that sends this secret (the gateway). Give the same value to the gateway.
+      USSD_WEBHOOK_SECRET: ${USSD_WEBHOOK_SECRET:-}
+      USSD_ALLOWED_IPS: ${USSD_ALLOWED_IPS:-}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      # Master keys are held in the platform's memory (not an HSM). A production start refuses that unless acknowledged.
+      ALLOW_SOFTWARE_KEYS: ${ALLOW_SOFTWARE_KEYS:-0}
+      MASTER_KEYS: ${MASTER_KEYS:-}
+      MASTER_KEY_ACTIVE: ${MASTER_KEY_ACTIVE:-}
     volumes: ["./reports:/reports:ro"]
     depends_on:
       postgres: { condition: service_healthy }
       trustlog: { condition: service_started }
-    ports: ["3000:3000"]
+    # Loopback only: admin routes, the USSD webhook and the lab must not be reachable straight from the network.
+    # Production: terminate TLS in a reverse proxy on the host or in the compose network and expose only the routes it needs.
+    ports: ["127.0.0.1:3000:3000"]
 
   portal:
     build: { context: ., dockerfile: apps/portal/Dockerfile }
-    ports: ["3001:3001"]
+    ports: ["127.0.0.1:3001:3001"]
 
 volumes: { pgdata: {}, logdata: {}, w1data: {}, w2data: {} }

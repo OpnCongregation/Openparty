@@ -8,6 +8,7 @@
     "build": "tsc -p .",
     "test": "vitest run",
     "start": "tsx src/main.ts",
+    "rotate-keys": "tsx src/rotate-keys.ts",
     "validate:packs": "tsx src/framework/cli.ts"
   },
   "dependencies": {

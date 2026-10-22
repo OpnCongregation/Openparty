@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+﻿import { readFile } from "node:fs/promises";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { createCtx } from "./platform.js";
@@ -215,7 +215,7 @@ export const SCENARIOS: Scenario[] = [
       let regId = "";
       await r.ok("Freeze the register", "s.77(4)", async () => {
         const f = await contests.freezeRegister(r.ctx, cid); regId = f.registerId;
-        return `Frozen with ${f.memberCount} members. Fingerprint ${f.fingerprint.slice(0, 16)}… is on the public log.`;
+        return `Frozen with ${f.memberCount} members. Fingerprint ${f.fingerprint.slice(0, 16)}â€¦ is on the public log.`;
       });
       await r.blocked("Try to open voting", "s.77(5)", "no_register_receipt", () => contests.openContest(r.ctx, cid));
       await r.ok("Record INEC's register receipt", "s.77(5)", async () => { await contests.recordRegisterReceipt(r.ctx, regId, "INEC-R-1"); return "Receipt stored."; });
@@ -252,16 +252,16 @@ export const SCENARIOS: Scenario[] = [
     id: "rules-lock", title: "Rules lock once a notice is out", law: "s.85, Reg 23(4), Reg 25(1)",
     blurb: "The party can change its rules before a notice, never after, and can never add extra criteria for aspirants.",
     async run(r) {
-      await r.ok("Set the minimum dues to N200", undefined, async () => { await contests.setRule(r.ctx, "dues.min_payment_minor", 20_000, "sec"); return "Rule saved."; });
-      await r.blocked("Try to add an aspirant exam score rule", "s.85: no extra criteria", "unknown_rule", () => contests.setRule(r.ctx, "aspirant_exam_score", 1, "sec"));
-      await r.blocked("Try to set the donor cap above the legal N500m", "s.94", "invalid_rule", () => contests.setRule(r.ctx, "finance.cap_per_donor_minor", 500_000_001 * 100, "sec"));
+      await r.ok("Set the minimum dues to N200", undefined, async () => { await contests.setRule(r.ctx, "dues.min_payment_minor", 20_000, "00000000-0000-4000-8000-000000000001"); return "Rule saved."; });
+      await r.blocked("Try to add an aspirant exam score rule", "s.85: no extra criteria", "unknown_rule", () => contests.setRule(r.ctx, "aspirant_exam_score", 1, "00000000-0000-4000-8000-000000000001"));
+      await r.blocked("Try to set the donor cap above the legal N500m", "s.94", "invalid_rule", () => contests.setRule(r.ctx, "finance.cap_per_donor_minor", 500_000_001 * 100, "00000000-0000-4000-8000-000000000001"));
       let cid = "";
       await r.ok("Create a contest and issue its notice", "s.82(1)", async () => { cid = await contestIn(r, 30); await contests.generateNotice(r.ctx, cid); return "Notice out. Rules locked."; });
-      await r.blocked("Try to change the minimum dues", "Rules lock", "rules_locked", () => contests.setRule(r.ctx, "dues.min_payment_minor", 1, "sec"));
+      await r.blocked("Try to change the minimum dues", "Rules lock", "rules_locked", () => contests.setRule(r.ctx, "dues.min_payment_minor", 1, "00000000-0000-4000-8000-000000000001"));
       await r.blocked("Edit the rule history in the database", "Append-only", /immutable/, () => r.ctx.db.query("UPDATE rules SET value='1'"));
       await r.blocked("Delete the rule history in the database", "Append-only", /immutable/, () => r.ctx.db.query("DELETE FROM rules"));
       await r.ok("The contest runs its course and closes", "Rules unlock", async () => { await runCourse(r, cid, false); return "INEC receipts, register freeze, voting and close all happen. Rules unlock."; });
-      await r.ok("Change the minimum dues again", undefined, async () => { await contests.setRule(r.ctx, "dues.min_payment_minor", 30_000, "sec"); return "Rule saved."; });
+      await r.ok("Change the minimum dues again", undefined, async () => { await contests.setRule(r.ctx, "dues.min_payment_minor", 30_000, "00000000-0000-4000-8000-000000000001"); return "Rule saved."; });
     },
   },
   {
@@ -276,7 +276,7 @@ export const SCENARIOS: Scenario[] = [
         if (n !== 2) throw new Error(`quarantine has ${n}`);
         return "Both refused payments are held in quarantine, nothing reached the ledger.";
       });
-      await r.ok("Set the party's own donor cap to N1m", undefined, async () => { await contests.setRule(r.ctx, "finance.cap_per_donor_minor", 100_000_000, "sec"); return "Cap N1,000,000."; });
+      await r.ok("Set the party's own donor cap to N1m", undefined, async () => { await contests.setRule(r.ctx, "finance.cap_per_donor_minor", 100_000_000, "00000000-0000-4000-8000-000000000001"); return "Cap N1,000,000."; });
       await r.ok("Chief A gives N600,000", "Reg 44", async () => { await finance.recordGift(r.ctx, NGN(600_000), donor); return "Recorded."; });
       await r.blocked("Chief A gives N500,000 more (total N1.1m)", "Reg 44: cumulative cap", "over_cap", () => finance.recordGift(r.ctx, NGN(500_000), donor));
       await r.ok("Chief A gives N400,000 (total exactly N1m)", "Reg 44", async () => { await finance.recordGift(r.ctx, NGN(400_000), donor); return "Recorded."; });

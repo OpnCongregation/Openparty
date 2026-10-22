@@ -14,7 +14,7 @@ export type Role = (typeof ROLES)[number];
 const PERMISSIONS: Record<Role, string[]> = {
   secretary: ["contest.create", "notice.generate", "receipt.record", "approval.propose", "approval.approve"],
   electoral_committee: ["contest.create", "receipt.record", "approval.propose", "approval.approve"],
-  treasurer: ["gift.record"],
+  treasurer: ["gift.record", "finance.retry"],
   auditor: ["finance.report", "register.read", "access.read", "approval.approve"],
   tribunal: [],
   ward_agent: ["member.activate"],
@@ -105,18 +105,25 @@ export async function propose(ctx: Ctx, admin: Admin, action: string, payload: u
 
 export async function approve(ctx: Ctx, admin: Admin, approvalId: string) {
   require_(admin, "approval.approve");
-  const rows = await ctx.db.query<{ action: string; payload: string; proposer: string; status: string }>("SELECT * FROM approvals WHERE id=$1", [approvalId]);
-  if (!rows.length) return fail("not_found", "No such approval", 404);
-  const a = rows[0];
-  const spec = ACTIONS[a.action];
-  if (a.status !== "pending") return fail("bad_state", `Approval is ${a.status}`, 409);
-  if (admin.id === a.proposer) return fail("self_approval", "You cannot approve your own proposal", 403);
-  if (!spec.approvers.includes(admin.role)) return fail("forbidden", `${admin.role} cannot approve ${a.action}`, 403);
-
-  await ctx.db.query("INSERT INTO approval_votes(approval_id,admin_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", [approvalId, admin.id]);
-  const n = (await ctx.db.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM approval_votes WHERE approval_id=$1", [approvalId]))[0].n;
+  // Vote, count and claim in one transaction under a row lock, so two simultaneous requests cannot both reach the
+  // threshold and both run the action: exactly one caller wins the 'pending' -> 'executing' transition.
+  const step = await ctx.db.tx(async (tx) => {
+    const rows = await tx.query<{ action: string; payload: string; proposer: string; status: string }>("SELECT * FROM approvals WHERE id=$1 FOR UPDATE", [approvalId]);
+    if (!rows.length) return fail("not_found", "No such approval", 404);
+    const a = rows[0];
+    const spec = ACTIONS[a.action];
+    if (a.status !== "pending") return fail("bad_state", `Approval is ${a.status}`, 409);
+    if (admin.id === a.proposer) return fail("self_approval", "You cannot approve your own proposal", 403);
+    if (!spec.approvers.includes(admin.role)) return fail("forbidden", `${admin.role} cannot approve ${a.action}`, 403);
+    await tx.query("INSERT INTO approval_votes(approval_id,admin_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", [approvalId, admin.id]);
+    const n = (await tx.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM approval_votes WHERE approval_id=$1", [approvalId]))[0].n;
+    const claimed = n >= spec.needed
+      && (await tx.query("UPDATE approvals SET status='executing' WHERE id=$1 AND status='pending' RETURNING id", [approvalId])).length === 1;
+    return { a, spec, n, claimed };
+  });
+  const { a, spec, n, claimed } = step;
   await ctx.log.append({ type: "approval.voted", data: { approval_id: approvalId, admin_id: admin.id, votes: n } });
-  if (n < spec.needed) return { executed: false, votes: n, needed: spec.needed };
+  if (!claimed) return { executed: false, votes: n, needed: spec.needed };
 
   try {
     const result = await spec.run(ctx, JSON.parse(a.payload), a.proposer);

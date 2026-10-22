@@ -6,12 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +24,46 @@ type Server struct {
 	anchorPath string
 	calendars  []string     // OpenTimestamps calendar servers; empty means simulated anchoring
 	client     *http.Client // nil uses a default with a timeout (tests inject their own)
+	limiter    *ipLimiter   // per-address request limit for the public endpoints; nil = unlimited (tests)
+
+	semOnce  sync.Once
+	proofSem chan struct{} // bounds concurrent proof computations
+
+	headMu    sync.Mutex
+	headCache struct {
+		at   time.Time
+		size int
+		root string
+		cos  []Cosignature
+	}
+}
+
+// withProofSlot runs fn if a proof slot is free, otherwise answers 503. Proofs cost O(log size) hashes over data that
+// must be re-read from memory each time, so they are bounded instead of allowed to pile up.
+func (s *Server) withProofSlot(w http.ResponseWriter, fn func()) {
+	s.semOnce.Do(func() { s.proofSem = make(chan struct{}, maxConcurrentProof) })
+	select {
+	case s.proofSem <- struct{}{}:
+		defer func() { <-s.proofSem }()
+		fn()
+	default:
+		w.Header().Set("Retry-After", "1")
+		writeJSON(w, 503, map[string]string{"error": "busy"})
+	}
+}
+
+// cosigsFor returns witness cosignatures for the head, reusing a result under a second old so that many readers
+// polling /head do not each trigger a round of outbound requests to every witness.
+func (s *Server) cosigsFor(h SignedHead) []Cosignature {
+	s.headMu.Lock()
+	defer s.headMu.Unlock()
+	c := &s.headCache
+	if c.size == h.Size && c.root == h.Root && time.Since(c.at) < time.Second {
+		return c.cos
+	}
+	c.cos = s.collectCosigs(h)
+	c.at, c.size, c.root = time.Now(), h.Size, h.Root
+	return c.cos
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -48,8 +90,18 @@ func (s *Server) Routes() http.Handler {
 			writeJSON(w, 401, map[string]string{"error": "unauthorized"})
 			return
 		}
-		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil || len(body) == 0 {
+		// A record over the cap is refused, never silently cut short: a truncated record would be logged as if complete.
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAppendBytes))
+		if err != nil {
+			var tooBig *http.MaxBytesError
+			if errors.As(err, &tooBig) {
+				writeJSON(w, 413, map[string]string{"error": "record too large"})
+				return
+			}
+			writeJSON(w, 400, map[string]string{"error": "unreadable body"})
+			return
+		}
+		if len(body) == 0 {
 			writeJSON(w, 400, map[string]string{"error": "empty body"})
 			return
 		}
@@ -63,14 +115,33 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("GET /head", func(w http.ResponseWriter, r *http.Request) {
 		h := s.log.Head()
-		writeJSON(w, 200, map[string]any{"head": h, "cosignatures": s.collectCosigs(h)})
+		writeJSON(w, 200, map[string]any{"head": h, "cosignatures": s.cosigsFor(h)})
 	})
 
+	// Entries are returned in pages: at most maxEntriesPerPage entries and about maxEntriesBytes of data per call. The
+	// reply says where the next page starts ("next"); a caller that wants a range keeps asking until next reaches `to`.
 	mux.HandleFunc("GET /entries", func(w http.ResponseWriter, r *http.Request) {
-		from, _ := strconv.Atoi(r.URL.Query().Get("from"))
-		to, err := strconv.Atoi(r.URL.Query().Get("to"))
-		if err != nil {
-			to = s.log.Size()
+		size := s.log.Size()
+		from, to := 0, size
+		var err error
+		if v := r.URL.Query().Get("from"); v != "" {
+			if from, err = strconv.Atoi(v); err != nil {
+				writeJSON(w, 400, map[string]string{"error": "from must be a whole number"})
+				return
+			}
+		}
+		if v := r.URL.Query().Get("to"); v != "" {
+			if to, err = strconv.Atoi(v); err != nil {
+				writeJSON(w, 400, map[string]string{"error": "to must be a whole number"})
+				return
+			}
+		}
+		if from < 0 || to > size || from > to {
+			writeJSON(w, 400, map[string]string{"error": "range out of bounds"})
+			return
+		}
+		if to-from > maxEntriesPerPage {
+			to = from + maxEntriesPerPage
 		}
 		e, err := s.log.Entries(from, to)
 		if err != nil {
@@ -78,11 +149,16 @@ func (s *Server) Routes() http.Handler {
 			return
 		}
 		// base64 keeps entry bytes exact, so witnesses reproduce identical leaf hashes
-		out := make([]string, len(e))
-		for i, b := range e {
-			out[i] = base64.StdEncoding.EncodeToString(b)
+		out := make([]string, 0, len(e))
+		budget := maxEntriesBytes
+		for _, b := range e {
+			if len(out) > 0 && len(b) > budget {
+				break
+			}
+			budget -= len(b)
+			out = append(out, base64.StdEncoding.EncodeToString(b))
 		}
-		writeJSON(w, 200, map[string]any{"from": from, "entries": out})
+		writeJSON(w, 200, map[string]any{"from": from, "entries": out, "next": from + len(out), "size": size})
 	})
 
 	mux.HandleFunc("GET /proof/inclusion", func(w http.ResponseWriter, r *http.Request) {
@@ -95,13 +171,15 @@ func (s *Server) Routes() http.Handler {
 			writeJSON(w, 400, map[string]string{"error": "index required"})
 			return
 		}
-		p, leaf, err := s.log.InclusionProof(idx, size)
-		if err != nil {
-			writeJSON(w, 400, map[string]string{"error": err.Error()})
-			return
-		}
-		root, _ := s.log.RootAt(size)
-		writeJSON(w, 200, map[string]any{"index": idx, "size": size, "leafHash": hex.EncodeToString(leaf), "root": hex.EncodeToString(root), "proof": hexList(p)})
+		s.withProofSlot(w, func() {
+			p, leaf, err := s.log.InclusionProof(idx, size)
+			if err != nil {
+				writeJSON(w, 400, map[string]string{"error": err.Error()})
+				return
+			}
+			root, _ := s.log.RootAt(size)
+			writeJSON(w, 200, map[string]any{"index": idx, "size": size, "leafHash": hex.EncodeToString(leaf), "root": hex.EncodeToString(root), "proof": hexList(p)})
+		})
 	})
 
 	mux.HandleFunc("GET /proof/consistency", func(w http.ResponseWriter, r *http.Request) {
@@ -114,14 +192,16 @@ func (s *Server) Routes() http.Handler {
 		if e2 != nil {
 			n = s.log.Size()
 		}
-		p, err := s.log.ConsistencyProof(o, n)
-		if err != nil {
-			writeJSON(w, 400, map[string]string{"error": err.Error()})
-			return
-		}
-		or, _ := s.log.RootAt(o)
-		nr, _ := s.log.RootAt(n)
-		writeJSON(w, 200, map[string]any{"old": o, "new": n, "oldRoot": hex.EncodeToString(or), "newRoot": hex.EncodeToString(nr), "proof": hexList(p)})
+		s.withProofSlot(w, func() {
+			p, err := s.log.ConsistencyProof(o, n)
+			if err != nil {
+				writeJSON(w, 400, map[string]string{"error": err.Error()})
+				return
+			}
+			or, _ := s.log.RootAt(o)
+			nr, _ := s.log.RootAt(n)
+			writeJSON(w, 200, map[string]any{"old": o, "new": n, "oldRoot": hex.EncodeToString(or), "newRoot": hex.EncodeToString(nr), "proof": hexList(p)})
+		})
 	})
 
 	mux.HandleFunc("GET /anchors", func(w http.ResponseWriter, r *http.Request) {
@@ -151,6 +231,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{"status": "ok"})
 	})
+	if s.limiter != nil {
+		return s.limiter.limit(mux)
+	}
 	return mux
 }
 
