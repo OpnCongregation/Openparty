@@ -69,7 +69,7 @@ profile:
       role: Each separate from the NWC; staggered terms
   national_officers:                        # elected by all members, 4-year terms, two terms at most
     - { office: National Chairman, count: 1 }
-    - { office: Deputy National Chairman (North, South), count: 2 }
+    - { office: "Deputy National Chairman (North, South)", count: 2 }
     - { office: National Vice Chairman (one per geopolitical zone), count: 6 }
     - { office: National Secretary and Deputy National Secretary, count: 2 }
     - { office: National Treasurer, count: 1 }
@@ -80,7 +80,7 @@ profile:
     - { office: National Auditor, count: 1 }
     - { office: National Women Leader, count: 1 }
     - { office: National Youth Leader, count: 1 }
-    - { office: National Leader, Persons with Disabilities, count: 1 }
+    - { office: "National Leader, Persons with Disabilities", count: 1 }
   note: The same offices repeat at state, LGA and ward level, scaled down.
   attestations:                             # things the engine cannot judge; a human confirms before certification
     NG-ORG-04: pending                      # name, acronym and logo review
