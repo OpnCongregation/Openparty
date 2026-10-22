@@ -1,0 +1,9 @@
+# SYNTHETIC. A fictional party on the fictional Testland pack. Test fixture only.
+party: TLP
+pack: { id: TL, version: "0.0" }
+settings:
+  identity.adapter: tl_id
+  primary.default_type: direct
+  finance.cap_per_donor_minor: 400000
+profile:
+  name: Testland Party

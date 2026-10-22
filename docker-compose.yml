@@ -1,0 +1,57 @@
+# Verified with Docker Desktop on 2026-10-22. Start order: see "Run with Docker" in README (LOG_KEY comes from the log's first start).
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: openparty
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d openparty"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  trustlog:
+    build: ./services/trustlog
+    environment:
+      APPEND_TOKEN: ${APPEND_TOKEN:?set in .env}
+      DATA_DIR: /data
+      WITNESS_URLS: http://witness1:8080,http://witness2:8080
+      ANCHOR_MODE: ${ANCHOR_MODE:-simulated}
+      OTS_CALENDARS: ${OTS_CALENDARS:-}
+    volumes: [logdata:/data]
+    ports: ["8080:8080"]
+
+  # Two witnesses on one host is for demonstration only. Real witnesses are run by independent parties.
+  witness1:
+    build: ./services/trustlog
+    command: ["witness"]
+    environment: { DATA_DIR: /data, LOG_URL: "http://trustlog:8080", LOG_KEY: "${LOG_KEY:?copy from trustlog startup output}" }
+    volumes: [w1data:/data]
+  witness2:
+    build: ./services/trustlog
+    command: ["witness"]
+    environment: { DATA_DIR: /data, LOG_URL: "http://trustlog:8080", LOG_KEY: "${LOG_KEY:?copy from trustlog startup output}" }
+    volumes: [w2data:/data]
+
+  platform:
+    build: { context: ., dockerfile: services/platform/Dockerfile }
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/openparty
+      MASTER_KEY_HEX: ${MASTER_KEY_HEX:?set in .env}
+      PEPPER_HEX: ${PEPPER_HEX:?set in .env}
+      TRUSTLOG_URL: http://trustlog:8080
+      APPEND_TOKEN: ${APPEND_TOKEN}
+      LAB_ENABLED: ${LAB_ENABLED:-0}
+    volumes: ["./reports:/reports:ro"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      trustlog: { condition: service_started }
+    ports: ["3000:3000"]
+
+  portal:
+    build: { context: ., dockerfile: apps/portal/Dockerfile }
+    ports: ["3001:3001"]
+
+volumes: { pgdata: {}, logdata: {}, w1data: {}, w2data: {} }

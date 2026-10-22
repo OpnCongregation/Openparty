@@ -1,0 +1,26 @@
+{
+  "name": "@openparty/platform",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "vitest run",
+    "start": "tsx src/main.ts",
+    "validate:packs": "tsx src/framework/cli.ts"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.2.17",
+    "fastify": "5.2.1",
+    "pg": "8.13.1",
+    "yaml": "2.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.5",
+    "@types/pg": "8.11.10",
+    "tsx": "4.19.2",
+    "typescript": "5.7.3",
+    "vitest": "2.1.8"
+  }
+}

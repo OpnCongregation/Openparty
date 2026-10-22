@@ -1,0 +1,81 @@
+# SYNTHETIC TEST PACK. NOT REAL LAW. Not for any country.
+#
+# "Testland" exists only to prove that the core has no country hard-coded: with this pack the same code enforces
+# different deadlines, a different currency and a different register. Used by the automated tests, never shipped as a
+# real law pack.
+id: TL
+version: "0.0"
+name: Testland (synthetic)
+status: test-fixture
+country: TL
+regulator: Testland Electoral Board
+currency:
+  code: TST
+  symbol: T$
+  minor_unit: cent
+  minor_per_unit: 100
+default_locale: en
+
+params:
+  identity.adapter: tl_id
+  identity.min_assurance_join: 1
+  identity.min_assurance_vote_remote: 2
+  identity.id_required: true
+  register.fields: [name, birth_date, ward, national_id]
+  register.days_before_contest: 14
+  register.export_format: csv
+  register.late_filing_bars_candidates: true
+  card.issued_on_activation: true
+  notice.days_before_contest: 14
+  notice.mode_required: true
+  notice.modes: [in_person]
+  primary.allowed_types: [direct]
+  primary.default_type: direct
+  primary.type_lock_days: 5
+  eligibility.party_criteria_allowed: true
+  finance.anonymous_gifts_allowed: false
+  finance.donor_fields: [name, address, occupation]
+  finance.cap_per_donor_minor: 500000
+  finance.foreign_funds_allowed: false
+  finance.accepted_currency: [TST]
+  finance.accepted_country: [TL]
+  org.hq: [Capital]
+
+features_off: []
+
+rules:
+  - id: TL-REG-01
+    title: Register filed 14 days before a contest
+    rule: register.days_before_contest >= 14
+    effect: Contest cannot open without the filing receipt
+    source: Testland Act (fictional) s.1
+    floor: F2
+    status: test
+  - id: TL-NOT-01
+    title: Notice 14 days ahead, in-person only
+    rule:
+      - notice.days_before_contest >= 14
+      - notice.modes in [in_person]
+    effect: Notice generator refuses a late notice
+    source: Testland Act (fictional) s.2
+    floor: F12
+    status: test
+  - id: TL-PRI-01
+    title: Direct primaries only; type locked 5 days before
+    rule:
+      - primary.allowed_types in [direct]
+      - primary.type_lock_days >= 5
+    effect: A consensus primary cannot be created
+    source: Testland Act (fictional) s.3
+    floor: F2
+    status: test
+  - id: TL-FIN-01
+    title: Donor cap 5,000.00 TST; domestic currency only
+    rule:
+      - finance.cap_per_donor_minor <= 500000
+      - finance.accepted_currency in [TST]
+      - finance.accepted_country in [TL]
+    effect: Gifts above the cap and foreign money are refused
+    source: Testland Act (fictional) s.4
+    floor: F7
+    status: test

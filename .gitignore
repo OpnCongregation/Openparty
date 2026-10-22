@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.next/
+*.db
+.env
+.env.*
+!.env.example
+reports/
+*.exe
+*.tsbuildinfo
+.DS_Store
+services/trustlog/trustlog
+services/trustlog/data/
+*.log

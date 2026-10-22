@@ -1,0 +1,21 @@
+{
+  "_meta": "English. Other languages are added as sibling files (ha.json, yo.json, ...) and must be written or reviewed by native speakers; missing keys fall back to English.",
+  "ussd.menu": "Welcome\n1 Join the party\n2 Pay dues\n3 My membership card",
+  "ussd.askId.default": "Enter your national ID number",
+  "ussd.askId.ng_nin": "Enter your 11-digit NIN",
+  "ussd.confirm": "Is this you? {0}\n1 Yes\n2 No",
+  "ussd.legal": "By law your name goes to {0} even if you stay anonymous in the party.\nShow my name to members?\n1 Yes, visible\n2 No, anonymous",
+  "ussd.askPin": "Choose a 4-digit PIN",
+  "ussd.repeatPin": "Repeat your PIN",
+  "ussd.pinMismatch": "PINs did not match. Dial again to restart.",
+  "ussd.joined": "You have joined. Card number {0}. See your ward agent to be confirmed.",
+  "ussd.enterPin": "Enter your PIN",
+  "ussd.amount": "Amount in {0}",
+  "ussd.paid": "Dues of {0}{1} received. Thank you. An SMS confirms.",
+  "ussd.card": "Card {0}\nStatus: {1}",
+  "ussd.bad": "Invalid choice. Dial again.",
+  "ussd.cancelled": "Cancelled.",
+  "sms.welcome": "Welcome to the party. Your card number is {0}. Visit your ward agent to be confirmed.",
+  "sms.active": "You are now an active member. Your card is valid.",
+  "sms.dues": "Dues of {0}{1} received. Ref {2}."
+}

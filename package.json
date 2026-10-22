@@ -1,0 +1,17 @@
+{
+  "name": "openparty",
+  "private": true,
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "services/platform",
+    "apps/*"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "report": "node scripts/test-report.mjs",
+    "test:tools": "node --test scripts/test-report.test.mjs scripts/prepublish-check.test.mjs",
+    "validate:packs": "npm run validate:packs --workspace @openparty/platform",
+    "prepublish:check": "node scripts/prepublish-check.mjs"
+  }
+}

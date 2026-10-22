@@ -1,0 +1,86 @@
+# Party settings: Digital Democratic Party of Nigeria (DDPN), the reference party.
+#
+# DDPN is a potential party, NOT registered with INEC. These settings show what a complete configuration looks like on
+# the Nigeria law pack (NG v1.0). Source: OpenParty PRD section 15. Values marked "sample" are examples, not decisions.
+#
+# `settings` are checked against the law pack before they can be used: a party may tighten the law, never loosen it.
+# `profile` is descriptive (name, creed, offices) and is shown publicly; a few fields are also checked (see the pack).
+party: DDPN
+pack: { id: NG, version: "1.0" }
+
+settings:
+  identity.adapter: ng_nin
+  primary.default_type: direct              # consensus only with every cleared aspirant's written consent, then member ratification
+  finance.cap_per_donor_minor: 1000000000   # N10,000,000 per donor (sample), well below the legal N500,000,000
+  finance.cap_window_days: 365              # the cap applies to a rolling year
+  dues.min_payment_minor: 10000             # N100, one month of standard dues
+  dues.standard_annual_minor: 120000        # N1,200 a year (N100 a month)
+  dues.reduced_annual_minor: 60000          # N600 a year for students, unemployed and retired members (self-declared)
+  dues.voting_lapse_months: 6               # voting rights pause after 6 months unpaid; membership itself is never cancelled for unpaid dues
+  proposals.threshold: 100
+  proposals.response_days: 30
+  ratings.min_to_show: 1                    # the number of ratings and the comments are always shown with the score
+  ratings.separate_member_public: true
+  ratings.effect_on_eligibility: none       # NG-ELIG-01
+  ratings.constituency: declared            # declared by the rater, not verified
+  languages.launch: [en, ha, yo, ig, pcm]
+  languages.second_wave: [ff, kr, tiv, ibb, ijc, bin]
+  org.hq: FCT
+  org.max_term_years: 4
+  org.max_terms: 2
+  org.min_states_in_executive: 24
+  org.women_target_pct: 35                  # sample; a party choice, shown on the officer dashboard
+  org.chairman_secretary_different_zone: true
+
+profile:
+  name: Digital Democratic Party of Nigeria
+  acronym: DDPN
+  motto: "The Rules Are the Godfather"      # draft, drawn from the essay that inspired the party
+  logo: to be designed                      # must avoid the coat of arms, uniformed services, chieftaincy regalia, ethnic or religious symbols and portraits (s.79(4))
+  headquarters: Abuja, FCT
+  channels: [app, web, ussd, sms, voice]
+  payment_channels: [card, bank_transfer, ussd, mobile_money]
+  source_of_funds: >-
+    Every due and donation, from any member or donor at home or abroad, must come from a Nigerian bank account or
+    wallet. Foreign cards and accounts are refused at payment, and any foreign inflow is quarantined and reported.
+  creed:
+    - Rules over rulers. No person stands above the party's written rules.
+    - One member, one vote. Members choose every leader and candidate, and every vote can be checked.
+    - Who pays, owns. The party is funded mainly by its members' dues, so no backer can own it.
+    - Power on probation. Anyone holding office in the party's name works in the open and answers to members.
+    - Belonging beyond tribe and faith. Membership is open to every Nigerian, and the party never organises by ethnicity or religion.
+    - Build people first. The party trains its own leaders long before it needs candidates.
+    - Win clean or lose clean. No vote buying, no thugs, and no rule broken "just this once".
+  organs:
+    - name: National Convention
+      sits: Every member, voting directly
+      role: Elects national officers; amends the party constitution by supermajority
+    - name: National Executive Committee (NEC)
+      sits: National officers, state chairmen, legislators elected on the platform
+      role: Sets policy between conventions; drawn from at least 24 states and the FCT (NG-ORG-01)
+    - name: National Working Committee (NWC)
+      sits: The national officers
+      role: Runs the party day to day
+    - name: Board of Trustees
+      sits: Senior members of good standing
+      role: Advisory only; no power over results, discipline or money
+    - name: Independent bodies
+      sits: Electoral Committee, Screening Board (advisory), Disciplinary Tribunal, Appeals Panel, Audit Committee, Ombudsman
+      role: Each separate from the NWC; staggered terms
+  national_officers:                        # elected by all members, 4-year terms, two terms at most
+    - { office: National Chairman, count: 1 }
+    - { office: Deputy National Chairman (North, South), count: 2 }
+    - { office: National Vice Chairman (one per geopolitical zone), count: 6 }
+    - { office: National Secretary and Deputy National Secretary, count: 2 }
+    - { office: National Treasurer, count: 1 }
+    - { office: National Financial Secretary, count: 1 }
+    - { office: National Legal Adviser, count: 1 }
+    - { office: National Organising Secretary, count: 1 }
+    - { office: National Publicity Secretary, count: 1 }
+    - { office: National Auditor, count: 1 }
+    - { office: National Women Leader, count: 1 }
+    - { office: National Youth Leader, count: 1 }
+    - { office: National Leader, Persons with Disabilities, count: 1 }
+  note: The same offices repeat at state, LGA and ward level, scaled down.
+  attestations:                             # things the engine cannot judge; a human confirms before certification
+    NG-ORG-04: pending                      # name, acronym and logo review

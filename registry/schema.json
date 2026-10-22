@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenParty public registry of deployments",
+  "type": "object",
+  "required": ["updated", "deployments"],
+  "properties": {
+    "updated": { "type": "string", "format": "date" },
+    "note": { "type": "string" },
+    "deployments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "party", "country", "law_pack", "floor_version", "id_adapter", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "party": { "type": "string" },
+          "country": { "type": "string", "minLength": 2, "maxLength": 2 },
+          "law_pack": {
+            "type": "object",
+            "required": ["id", "version", "status"],
+            "properties": { "id": { "type": "string" }, "version": { "type": "string" }, "status": { "type": "string" } }
+          },
+          "floor_version": { "type": "string" },
+          "id_adapter": { "type": "string" },
+          "certified_by": { "type": ["string", "null"] },
+          "last_check": { "type": ["string", "null"], "format": "date" },
+          "status": { "enum": ["planned", "listed", "suspended", "revoked"] },
+          "settings_fingerprint": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+          "public_log": { "type": ["string", "null"], "format": "uri" },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}

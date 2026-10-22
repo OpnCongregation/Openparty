@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: services/trustlog/go.mod
+      - run: npm ci
+      - name: Law packs and party settings are well formed, cited, and obey their packs
+        run: npm run validate:packs
+      - name: Trust log (Go)
+        run: go test -count=1 ./...
+        working-directory: services/trustlog
+      - name: Platform (rules, finance, USSD, layers, lab)
+        run: npm test --workspace @openparty/platform
+      - name: Portal verifier
+        run: npm test --workspace @openparty/portal
+      - name: Tooling (test report, publish check)
+        run: npm run test:tools
+      - name: Portal builds
+        run: npx next build
+        working-directory: apps/portal
+      - name: Nothing secret or personal in the tree
+        run: npm run prepublish:check
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Images build
+        run: |
+          export POSTGRES_PASSWORD=ci APPEND_TOKEN=ci MASTER_KEY_HEX=$(printf '0%.0s' {1..64}) PEPPER_HEX=$(printf '1%.0s' {1..64}) LOG_KEY=ci
+          docker compose build

@@ -1,0 +1,93 @@
+# International floor, version 1.0.
+# The minimum every deployment must meet, in every country, to be certified. It sits under the core and cannot be
+# switched off by a law pack or a party. Grounds follow the OpenParty PRD section 13.
+#
+# `status` is an honest self-assessment of THIS codebase, not a certification:
+#   enforced  = the code enforces it and a test proves it
+#   partial   = part of it is enforced; `gap` says what is missing
+#   not_built = the module that would enforce it does not exist yet
+#
+# `check` names an automated check in services/platform/src/framework/floor.ts (when one exists).
+id: FLOOR
+version: "1.0"
+rules:
+  - id: F1
+    title: Secret ballot in internal elections
+    enforces: Ballots encrypted from casting to tally; receipts never show the choice
+    grounds: ICCPR Art. 25(b)
+    status: not_built
+    gap: Voting and tally module (P1) is not built.
+  - id: F2
+    title: Equal vote
+    enforces: One verified member, one vote, per contest
+    grounds: ICCPR Art. 25(b)
+    status: partial
+    gap: One verified person, one membership is enforced (unique id hash). Voting itself is not built.
+    tests: ["rejects a second membership on the same NIN"]
+    check: one_person_one_membership
+  - id: F3
+    title: Open, non-discriminatory membership
+    enforces: No field or rule based on ethnicity, religion, sex, origin or disability decides who may join or stand
+    grounds: ICCPR Arts. 2, 25, 26
+    status: enforced
+    note: The register may HOLD sex and disability status where national law requires them; they must never gate anyone.
+    tests: ["has no rule that could add aspirant criteria (s.85)"]
+    check: no_protected_attribute_gates
+  - id: F4
+    title: Free to join and free to leave
+    enforces: Resignation is always available, never blocked or penalised
+    grounds: ICCPR Art. 22
+    status: enforced
+    tests: ["dues need a current member and meet the minimum"]
+    check: resignation_available
+  - id: F5
+    title: Leaders chosen by members at regular intervals
+    enforces: Officer terms and election dates tracked; no officer without an election record
+    grounds: Venice Commission and ODIHR Guidelines
+    status: not_built
+    gap: Party settings carry the term limits and they are checked against the pack; officer election tracking is not built.
+    check: officer_terms_within_pack
+  - id: F6
+    title: Fair hearing before any sanction
+    enforces: Written offences, notice, hearing, reasoned ruling, appeal to a separate body
+    grounds: Venice Commission and ODIHR Guidelines
+    status: not_built
+    gap: Tribunal and appeals module (P1) is not built.
+  - id: F7
+    title: Transparent party finances
+    enforces: Accounts and donor records kept and published as the law pack requires
+    grounds: Venice Commission and ODIHR Guidelines; ACDEG
+    status: partial
+    gap: Append-only ledger, donor report and reconciliation exist; annual statements and audited expense reports are not built.
+    tests: ["ledger is immutable and report reconciles"]
+  - id: F8
+    title: Privacy of political opinion
+    enforces: Encrypted records; minimal data; members choose visible or anonymous
+    grounds: ICCPR Art. 17
+    status: enforced
+    tests: ["a full join/activate/pay cycle puts no identity strings on the log", "destroying the key makes the record unreadable while the row and log remain"]
+  - id: F9
+    title: Women can take part fully
+    enforces: No barrier to women standing or voting; gender data reported to the party
+    grounds: CEDAW Art. 7
+    status: partial
+    gap: No gendered barrier exists in the code; the officer dashboard that reports gender data is not built.
+  - id: F10
+    title: Persons with disabilities can take part fully
+    enforces: Accessible channels (voice, large text, agent help) on every core action
+    grounds: CRPD Art. 29
+    status: partial
+    gap: USSD and ward-agent activation exist; voice menus, large-text app and agent-assisted voting are not built.
+  - id: F11
+    title: No violence or militias
+    enforces: No security or force role exists in the system
+    grounds: ACDEG; ECOWAS Protocol on Democracy and Good Governance
+    status: enforced
+    tests: ["no security role and no super admin"]
+    check: no_security_role
+  - id: F12
+    title: Results anyone can check
+    enforces: Public log, independent verifier, paper audit
+    grounds: Foundation requirement (goes beyond the treaties)
+    status: partial
+    gap: Public Merkle log with witnesses and an in-browser verifier exist; paper audit is not built and Bitcoin anchoring is simulated until switched on.

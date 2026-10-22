@@ -1,0 +1,22 @@
+{
+  "$schema": "./schema.json",
+  "updated": "2026-10-22",
+  "note": "Public registry of OpenParty deployments (PRD section 18). Nothing here is certified yet: no certifier has run the conformance suite.",
+  "deployments": [
+    {
+      "id": "ddpn-reference",
+      "name": "DDPN reference",
+      "party": "Digital Democratic Party of Nigeria",
+      "country": "NG",
+      "law_pack": { "id": "NG", "version": "1.0", "status": "draft" },
+      "floor_version": "1.0",
+      "id_adapter": "ng_nin",
+      "certified_by": null,
+      "last_check": null,
+      "status": "planned",
+      "settings_fingerprint": null,
+      "public_log": null,
+      "reason": "Reference deployment for the framework. DDPN is a potential party, not registered with INEC."
+    }
+  ]
+}

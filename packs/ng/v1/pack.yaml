@@ -1,0 +1,279 @@
+# Law pack: Nigeria, version 1.0 (DRAFT).
+#
+# Transcribed from the OpenParty PRD sections 4 and 14 (Electoral Act 2026 "s.", INEC Regulations and Guidelines
+# 2026 "Reg", NDPA 2023). It has NOT been reviewed by Nigerian counsel and is not legal advice. Every rule carries its
+# citation so a reviewer can check it against the source text. See docs/law-pack-authoring.md.
+#
+# How a rule works: `rule` is `<param> <op> <value>`. Ops: >=  <=  ==  in  has.
+#   >= / <=   a party may set the param to anything on the stricter side of the bound
+#   ==        fixed by law, a party cannot change it
+#   in        value must be one of the listed values (a list value must be a subset)
+#   has       a list value must contain every listed item
+# A party's settings are checked against EVERY rule before they can be saved: a higher layer can tighten, never loosen.
+id: NG
+version: "1.0"
+name: Nigeria
+status: draft
+country: NG
+regulator: INEC
+currency:
+  code: NGN
+  symbol: N               # plain N: the naira sign does not fit a GSM-7 USSD or SMS message
+  minor_unit: kobo
+  minor_per_unit: 100
+default_locale: en
+
+# Defaults used when a party's settings are silent. Each is also the pack's own value for the rule below.
+params:
+  identity.adapter: ng_nin
+  identity.min_assurance_join: 2          # 1 low (self-declared), 2 medium (document/database), 3 high (biometric/in person)
+  identity.min_assurance_vote_remote: 3
+  identity.id_required: true
+  register.fields: [name, sex, birth_date, address, state, lga, ward, polling_unit, national_id, photo, disability_status]
+  register.days_before_contest: 21
+  register.export_format: pdf_read_only
+  register.late_filing_bars_candidates: true
+  card.issued_on_activation: true
+  notice.days_before_contest: 21
+  notice.mode_required: true
+  notice.modes: [virtual, in_person]
+  guidelines.publish_days_before: 10
+  docpack.days_before: 7
+  primary.allowed_types: [direct, consensus]
+  primary.default_type: direct
+  primary.consensus_requires_all_consents: true
+  primary.type_lock_days: 3
+  primary.result_form: EC16B
+  eligibility.party_criteria_allowed: false
+  eligibility.appointees_excluded: true
+  finance.anonymous_gifts_allowed: false
+  finance.donor_fields: [name, address, occupation]
+  finance.cap_per_donor_minor: 50000000000        # N500,000,000 in kobo
+  finance.foreign_funds_allowed: false
+  finance.foreign_funds_handover_days: 21
+  finance.accepted_currency: [NGN]
+  finance.accepted_country: [NG]
+  finance.annual_statement_due: "03-30"
+  finance.election_expense_audit_months: 6
+  org.min_states_in_executive: 24
+  org.max_term_years: 4
+  org.hq: [FCT]
+  safety.security_group_allowed: false
+  safety.moderate_religion_tribe_campaigning: true
+  data.affiliation_is_sensitive: true
+  data.explicit_consent_required: true
+  data.dpia_required: true
+  data.dpo_required: true
+
+# Features the law switches off. A party cannot turn these back on.
+features_off:
+  - key: eligibility.party_criteria_allowed
+    effect: Screening, covenant, career record and ratings are advisory only and never remove an aspirant
+    source: Electoral Act 2026 s.85; INEC Regulations 2026 Reg 25(1)
+
+rules:
+  - id: NG-ID-01
+    title: Identity - National Identification Number required
+    rule: identity.id_required == true
+    effect: Every member is verified through an allowed ID adapter before joining
+    source: Electoral Act 2026 s.77(2); INEC Regulations 2026 Reg 4(1)
+    floor: F2
+    status: in force
+  - id: NG-ID-02
+    title: Identity - allowed adapters and assurance levels
+    rule:
+      - identity.adapter in [ng_nin, agent_paper_id]
+      - identity.min_assurance_join >= 2
+      - identity.min_assurance_vote_remote >= 3
+    effect: Joining needs at least medium assurance and remote voting needs high (set by the pack, not by law text)
+    source: OpenParty PRD section 16 (pack-level policy)
+    floor: F2
+    status: draft
+  - id: NG-REG-01
+    title: Register filed at least 21 days before a contest, read-only PDF plus hard copy
+    rule:
+      - register.days_before_contest >= 21
+      - register.export_format == pdf_read_only
+    effect: Contest cannot open without the filing receipt
+    source: Electoral Act 2026 s.77(4); INEC Regulations 2026 Reg 4(3)
+    floor: F2
+    status: in force
+  - id: NG-REG-02
+    title: Register fields
+    rule: register.fields has [name, sex, birth_date, address, state, lga, ward, polling_unit, national_id, photo, disability_status]
+    effect: Member record holds at least these fields, encrypted
+    source: Electoral Act 2026 s.77(2); INEC Regulations 2026 Reg 4(1)
+    floor: F8
+    status: in force
+  - id: NG-REG-03
+    title: Only the filed register may be used; late filing bars candidates
+    rule: register.late_filing_bars_candidates == true
+    effect: A member activated after the freeze is not on that contest's register
+    source: Electoral Act 2026 s.77(5) to (7); INEC Regulations 2026 Reg 4(4) to (6)
+    floor: F2
+    status: in force
+  - id: NG-CARD-01
+    title: Membership card issued on registration
+    rule: card.issued_on_activation == true
+    effect: No active member without a card number
+    source: Electoral Act 2026 s.77(3)
+    floor: F2
+    status: in force
+  - id: NG-NOT-01
+    title: Contest notice to INEC at least 21 days ahead, stating mode (virtual or in-person)
+    rule:
+      - notice.days_before_contest >= 21
+      - notice.mode_required == true
+      - notice.modes in [virtual, in_person]
+    effect: Notice generator refuses a late notice; a contest cannot exist without a mode; voting is locked until the receipt is uploaded
+    source: Electoral Act 2026 s.82(1); INEC Regulations 2026 Reg 10(1),(2), 22(1)
+    floor: F12
+    status: in force
+  - id: NG-NOT-02
+    title: Guidelines published at least 10 days ahead
+    rule: guidelines.publish_days_before >= 10
+    effect: Auto-publish on the party site with the timestamp on the log
+    source: INEC Regulations 2026 Reg 22(3), 23(2)
+    floor: F12
+    status: in force
+  - id: NG-NOT-03
+    title: Document pack to INEC 7 days ahead
+    rule: docpack.days_before >= 7
+    effect: Committee list, aspirant list, agenda, guidelines and constitution copies generated from the system
+    source: INEC Regulations 2026 Reg 10(4)
+    floor: F12
+    status: in force
+  - id: NG-PRI-01
+    title: Allowed primaries - direct or consensus only
+    rule:
+      - primary.allowed_types in [direct, consensus]
+      - primary.default_type in [direct, consensus]
+    effect: A contest cannot be created with any other primary type
+    source: Electoral Act 2026 s.84(2); INEC Regulations 2026 Reg 24(1)
+    floor: F2
+    status: in force
+  - id: NG-PRI-02
+    title: Consensus needs written consent of every cleared aspirant, else direct primary
+    rule: primary.consensus_requires_all_consents == true
+    effect: Consensus cannot complete with one consent missing
+    source: Electoral Act 2026 s.87; INEC Regulations 2026 Reg 24(5)
+    floor: F1
+    status: in force
+  - id: NG-PRI-03
+    title: Primary type locked 3 days before
+    rule: primary.type_lock_days >= 3
+    effect: Change of primary type is blocked inside the lock window
+    source: INEC Regulations 2026 Reg 24(3)
+    floor: F12
+    status: in force
+  - id: NG-PRI-04
+    title: Result on Form EC16B
+    rule: primary.result_form == EC16B
+    effect: The result form is produced from the signed tally
+    source: INEC Regulations 2026 Reg 27(1)
+    floor: F12
+    status: in force
+  - id: NG-ELIG-01
+    title: No party criteria to qualify or disqualify aspirants beyond the Constitution
+    rule: eligibility.party_criteria_allowed == false
+    effect: Screening, covenant and ratings are advisory only; no code path removes an aspirant on party criteria
+    source: Electoral Act 2026 s.85; INEC Regulations 2026 Reg 23(4), 25(1)
+    floor: F3
+    status: in force
+  - id: NG-ELIG-02
+    title: Political appointees cannot vote or stand in primaries
+    rule: eligibility.appointees_excluded == true
+    effect: An appointee flag removes a member from that contest's roll
+    source: Electoral Act 2026 s.88(1)
+    floor: F2
+    status: in force
+  - id: NG-FIN-01
+    title: No anonymous gifts; donor name, address and occupation recorded
+    rule:
+      - finance.anonymous_gifts_allowed == false
+      - finance.donor_fields has [name, address, occupation]
+    effect: A gift without full donor details is refused
+    source: Electoral Act 2026 s.94(1); INEC Regulations 2026 Reg 44(3)
+    floor: F7
+    status: in force
+  - id: NG-FIN-02
+    title: Donation cap N500 million per donor (party may set lower)
+    rule: finance.cap_per_donor_minor <= 50000000000
+    effect: A cap above the legal ceiling cannot be saved; gifts beyond the cap are refused
+    source: INEC Regulations 2026 Reg 39(1); Electoral Act 2026 s.94(2)
+    floor: F7
+    status: in force
+  - id: NG-FIN-03
+    title: No funds from outside Nigeria; report and hand over within 21 days
+    rule:
+      - finance.foreign_funds_allowed == false
+      - finance.foreign_funds_handover_days <= 21
+      - finance.accepted_currency in [NGN]
+      - finance.accepted_country in [NG]
+    effect: Foreign payments are refused and quarantined
+    source: Electoral Act 2026 s.89; INEC Regulations 2026 Reg 42
+    floor: F7
+    status: in force
+  - id: NG-FIN-04
+    title: Annual statement with member list by 30 March; audited election expenses within 6 months
+    rule:
+      - finance.annual_statement_due == "03-30"
+      - finance.election_expense_audit_months <= 6
+    effect: The ledger produces both reports
+    source: Electoral Act 2026 s.90(1); INEC Regulations 2026 Reg 41, 43
+    floor: F7
+    status: in force
+  - id: NG-ORG-01
+    title: National executive drawn from at least 24 states and the FCT
+    rule: org.min_states_in_executive >= 24
+    effect: Officer dashboard shows state spread and alerts before a breach
+    source: INEC Regulations 2026 Reg 1(3), 3
+    floor: F5
+    status: in force
+  - id: NG-ORG-02
+    title: Executives elected at intervals of no more than 4 years
+    rule: org.max_term_years <= 4
+    effect: Term dates tracked with an alert before a breach
+    source: INEC Regulations 2026 Reg 16(1)
+    floor: F5
+    status: in force
+  - id: NG-ORG-03
+    title: Headquarters in the FCT
+    rule: org.hq in [FCT]
+    effect: Party settings must name an FCT headquarters
+    source: INEC Regulations 2026 Reg 1(2)(j)
+    floor: F5
+    status: in force
+  - id: NG-ORG-04
+    title: Name and logo without ethnic, religious or regional meaning
+    check: attest
+    attest: A human reviewer confirms the name, acronym and logo carry no ethnic, religious or regional meaning, do not resemble an existing party, and avoid the coat of arms, uniformed services, chieftaincy regalia and portraits
+    effect: Needs attestation; the engine cannot judge meaning
+    source: INEC Regulations 2026 Reg 1(1)(a); Electoral Act 2026 s.79(4)
+    floor: F3
+    status: in force
+  - id: NG-SAF-01
+    title: No group trained for force or used for security
+    rule: safety.security_group_allowed == false
+    effect: No security role exists in the system
+    source: Electoral Act 2026 s.96(5),(6)
+    floor: F11
+    status: in force
+  - id: NG-SAF-02
+    title: Moderate campaigning on religion or tribe
+    rule: safety.moderate_religion_tribe_campaigning == true
+    effect: Ratings and comments are moderated; flagged content handled within 24 hours
+    source: Electoral Act 2026 s.101
+    floor: F3
+    status: in force
+  - id: NG-DP-01
+    title: Political affiliation is sensitive data
+    rule:
+      - data.affiliation_is_sensitive == true
+      - data.explicit_consent_required == true
+      - data.dpia_required == true
+      - data.dpo_required == true
+    effect: Explicit consent, data protection impact assessment and a data protection officer before the first sign-up
+    source: Nigeria Data Protection Act 2023 s.30
+    floor: F8
+    status: in force
