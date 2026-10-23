@@ -40,7 +40,7 @@ const EVENTS: Record<string, Record<string, Kind>> = {
   "contest.type_changed": { contest_id: "uuid", primary_type: "token" },
   "contest.noticed": { contest_id: "uuid", mode: "token", rules_hash: "hash", vote_date: "iso" },
   "contest.notice_receipt": { contest_id: "uuid", receipt_hash: "hash" },
-  "register.frozen": { contest_id: "uuid", register_id: "uuid", fingerprint: "hash", member_count: "int" },
+  "register.frozen": { contest_id: "uuid", register_id: "uuid", fingerprint: "hash", member_count: "int", excluded_count: "int" },
   "register.receipt": { register_id: "uuid", receipt_hash: "hash" },
   "contest.opened": { contest_id: "uuid" },
   "contest.closed": { contest_id: "uuid" },

@@ -9,7 +9,10 @@ All notable changes. This project uses [semantic versioning](https://semver.org/
   (`contest.close`, proposed by the electoral committee, approved by secretary and auditor) instead of a bare function; INEC receipt references must be
   6-64 characters of letters, digits and `. _ / -` (`bad_receipt`); two unclosed contests cannot share a vote date (`contest_overlap`); a failed register
   freeze lists every incomplete member record, not just the first; `isEligible()` defines who may vote (on the frozen register AND still active);
-  reopening a closed contest says `already_closed`. 6 tests in `election-gates.test.ts`.
+  the admin can now **file only the complete records**: `GET /admin/contests/:id/register-check` lists the incomplete members (card number and missing fields), a
+  failed freeze returns the same list as structured `details`, and a `register.freeze` approval with `excludeIncomplete: true` files the rest. Left-off members are kept in
+  `register_exclusions` (they are not on the register, so `isEligible` is false), and the public log's `register.frozen` carries only `excluded_count`.
+  Reopening a closed contest says `already_closed`. 6 tests in `election-gates.test.ts`.
 - The public-log guard is now an allowlist: listed event types, exact fields, strict value shapes (`logschema.ts`). Serialized
   personal data inside a string field, unlisted field names and unknown event types are refused. 8 adversarial tests added.
 - `docker-compose.yml` publishes the log, platform and portal ports on `127.0.0.1` only.

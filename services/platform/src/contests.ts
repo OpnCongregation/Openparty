@@ -128,30 +128,62 @@ export async function recordNoticeReceipt(ctx: Ctx, contestId: string, receipt: 
 
 // ---- Register ---------------------------------------------------------------------------------
 
+export interface IncompleteMember { memberId: string; cardNo: string; missing: string[] }
+
+/** Sort every active member into complete records (ready for the register) and incomplete ones (named, with the fields they lack). */
+async function sortRegisterCandidates(ctx: Ctx) {
+  const members = await ctx.db.query<{ id: string; card_no: string; record_enc: string }>(
+    "SELECT id, card_no, record_enc FROM members WHERE state='active' AND activated_at <= $1 ORDER BY card_no", [ctx.clock().toISOString()]);
+  const complete: { id: string; row: RegisterRecord & { card_no: string } }[] = [];
+  const incomplete: IncompleteMember[] = [];
+  for (const m of members) {
+    const rec = await ctx.keys.decrypt<RegisterRecord>(m.id, m.record_enc);
+    const missing = missingRegisterFields(rec, ctx.config.get<string[]>("register.fields"));
+    if (missing.length) { incomplete.push({ memberId: m.id, cardNo: m.card_no, missing }); continue; }
+    const { phone: _phone, ...legal } = rec;
+    complete.push({ id: m.id, row: { card_no: m.card_no, ...legal } as any });
+  }
+  return { complete, incomplete };
+}
+
+/**
+ * Read-only check before filing: who is complete, and which members would have to be left off (with the fields each lacks).
+ * After the freeze it shows who WAS left off. Uses card numbers, never names.
+ */
+export async function previewRegister(ctx: Ctx, contestId: string) {
+  const c = await getContest(ctx, contestId);
+  if (c.register_id) {
+    const ex = await ctx.db.query<{ member_id: string; card_no: string; missing: string }>("SELECT member_id, card_no, missing FROM register_exclusions WHERE register_id=$1 ORDER BY card_no", [c.register_id]);
+    const filed = await ctx.db.query<{ member_count: number }>("SELECT member_count FROM registers WHERE id=$1", [c.register_id]);
+    return { frozen: true, registerId: c.register_id, completeCount: filed[0].member_count, incomplete: ex.map((e) => ({ memberId: e.member_id, cardNo: e.card_no, missing: e.missing.split(",") })) };
+  }
+  const { complete, incomplete } = await sortRegisterCandidates(ctx);
+  return { frozen: false, completeCount: complete.length, incomplete };
+}
+
 /**
  * Freeze the register for a contest: snapshot active members, check every s.77(2) field, fingerprint it,
  * and post the fingerprint to the log. Filing must be at least register.days_before_contest days before the contest.
+ *
+ * An incomplete record normally stops the filing, with every incomplete member named in `details`. The admin may instead choose
+ * `excludeIncomplete`: the complete records are filed, the rest are recorded in register_exclusions (so they can be shown to the admin
+ * and cannot vote: they are not on the register), and the public log carries only the COUNT left off, never who.
  */
-export async function freezeRegister(ctx: Ctx, contestId: string) {
+export async function freezeRegister(ctx: Ctx, contestId: string, opts: { excludeIncomplete?: boolean } = {}) {
   const c = await getContest(ctx, contestId);
   if (c.register_id) return fail("already_frozen", "Register already frozen for this contest", 409);
   const regDays = ctx.config.get<number>("register.days_before_contest");
   if ((new Date(c.vote_date).getTime() - ctx.clock().getTime()) / DAY < regDays)
     return fail("register_late", `Register must be filed at least ${regDays} days before the contest`, 422);
 
-  const members = await ctx.db.query<{ id: string; card_no: string; record_enc: string }>(
-    "SELECT id, card_no, record_enc FROM members WHERE state='active' AND activated_at <= $1 ORDER BY card_no", [ctx.clock().toISOString()]);
-  const rows: (RegisterRecord & { card_no: string })[] = [];
-  const problems: string[] = [];
-  for (const m of members) {
-    const rec = await ctx.keys.decrypt<RegisterRecord>(m.id, m.record_enc);
-    const missing = missingRegisterFields(rec, ctx.config.get<string[]>("register.fields"));
-    if (missing.length) { problems.push(`${m.card_no} missing: ${missing.join(", ")}`); continue; }
-    const { phone: _phone, ...legal } = rec;
-    rows.push({ card_no: m.card_no, ...legal } as any);
+  const { complete, incomplete } = await sortRegisterCandidates(ctx);
+  if (incomplete.length && !opts.excludeIncomplete) {
+    const shown = incomplete.slice(0, 20).map((i) => `${i.cardNo} missing: ${i.missing.join(", ")}`).join("; ");
+    return fail("incomplete_record", `${incomplete.length} member record(s) incomplete: ${shown}${incomplete.length > 20 ? "; ..." : ""}. Fix them, or file the ${complete.length} complete records only.`, 422,
+      { completeCount: complete.length, incomplete });
   }
-  // A register with a gap cannot be filed, but the operator should see every gap at once, not fix them one filing attempt at a time.
-  if (problems.length) return fail("incomplete_record", `${problems.length} member record(s) incomplete: ${problems.slice(0, 20).join("; ")}${problems.length > 20 ? "; ..." : ""}`, 422);
+  if (!complete.length && incomplete.length) return fail("empty_register", "Every member record is incomplete, so there is nothing to file", 422, { incomplete });
+  const rows = complete.map((m) => m.row);
   const exportJson = canonical({ contest_id: contestId, frozen_at: ctx.clock().toISOString(), members: rows });
   const fingerprint = sha256hex(exportJson);
   const id = randomUUID();
@@ -161,11 +193,12 @@ export async function freezeRegister(ctx: Ctx, contestId: string) {
     await tx.query(
       "INSERT INTO registers(id,contest_id,frozen_at,fingerprint,member_count,export_json) VALUES ($1,$2,$3,$4,$5,$6)",
       [id, contestId, ctx.clock().toISOString(), fingerprint, rows.length, await ctx.keys.encrypt(`register:${id}`, JSON.parse(exportJson), tx)]);
-    for (const m of members) await tx.query("INSERT INTO register_members(register_id,member_id) VALUES ($1,$2)", [id, m.id]);
+    for (const m of complete) await tx.query("INSERT INTO register_members(register_id,member_id) VALUES ($1,$2)", [id, m.id]);
+    for (const i of incomplete) await tx.query("INSERT INTO register_exclusions(register_id,member_id,card_no,missing) VALUES ($1,$2,$3,$4)", [id, i.memberId, i.cardNo, i.missing.join(",")]);
     await tx.query("UPDATE contests SET register_id=$2 WHERE id=$1", [contestId, id]);
-    await ctx.events.emit(tx, { type: "register.frozen", data: { contest_id: contestId, register_id: id, fingerprint, member_count: rows.length } });
+    await ctx.events.emit(tx, { type: "register.frozen", data: { contest_id: contestId, register_id: id, fingerprint, member_count: rows.length, excluded_count: incomplete.length } });
   });
-  return { registerId: id, fingerprint, memberCount: rows.length };
+  return { registerId: id, fingerprint, memberCount: rows.length, excludedCount: incomplete.length };
 }
 
 /** Read-only register export for INEC. Decrypts on demand; callers must be authorised and the access logged. */

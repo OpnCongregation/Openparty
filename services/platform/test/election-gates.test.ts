@@ -92,4 +92,53 @@ describe("election gates", () => {
     expect(await contests.isEligible(ctx, cid, ms[2].memberId)).toBe(true);
     expect(await contests.isEligible(ctx, cid, "nobody")).toBe(false);
   });
+
+  async function breakTwo(ctx: any, ms: any[]) {
+    for (const m of ms.slice(0, 2)) {
+      const rec = await ctx.keys.decrypt(m.memberId, (await ctx.db.query("SELECT record_enc FROM members WHERE id=$1", [m.memberId]))[0].record_enc);
+      rec.polling_unit = "";
+      await ctx.db.query("UPDATE members SET record_enc=$2 WHERE id=$1", [m.memberId, await ctx.keys.encrypt(m.memberId, rec)]);
+    }
+  }
+
+  it("preview names the incomplete members; the admin can file only the complete ones", async () => {
+    const { ctx, log, sec, ec, aud, cid, ms } = await noticed();
+    await breakTwo(ctx, ms);
+    const pv: any = await contests.previewRegister(ctx, cid);
+    expect(pv).toMatchObject({ frozen: false, completeCount: 1 });
+    expect(pv.incomplete).toHaveLength(2);
+    expect(pv.incomplete[0]).toMatchObject({ missing: ["polling_unit"] });
+    expect(JSON.stringify(pv)).not.toContain(ms[0].nin); // card numbers only, no personal data
+
+    const err: any = await contests.freezeRegister(ctx, cid).catch((e) => e);
+    expect(err.details.incomplete).toHaveLength(2); // the structured list the admin screen highlights
+    expect(await ctx.db.query("SELECT 1 FROM registers")).toHaveLength(0);
+
+    // through the approvals path, with the explicit choice in the payload
+    const id = await propose(ctx, sec, "register.freeze", { contestId: cid, excludeIncomplete: true });
+    await approve(ctx, ec, id); await approve(ctx, aud, id);
+    await ctx.events.flush();
+    const reg = (await ctx.db.query<any>("SELECT * FROM registers WHERE contest_id=$1", [cid]))[0];
+    expect(reg.member_count).toBe(1);
+    expect(await ctx.db.query("SELECT 1 FROM register_members WHERE register_id=$1", [reg.id])).toHaveLength(1);
+    const ev = log.events.find((e: any) => e.type === "register.frozen")!.data;
+    expect(ev).toMatchObject({ member_count: 1, excluded_count: 2 }); // the log carries the count, never who
+    expect(JSON.stringify(ev)).not.toMatch(/card|PU|polling/i);
+
+    const after: any = await contests.previewRegister(ctx, cid);
+    expect(after).toMatchObject({ frozen: true, completeCount: 1 });
+    expect(after.incomplete.map((i: any) => i.cardNo).sort()).toEqual(pv.incomplete.map((i: any) => i.cardNo).sort());
+    expect(await contests.isEligible(ctx, cid, ms[0].memberId)).toBe(false); // left off, so cannot vote
+    expect(await contests.isEligible(ctx, cid, ms[2].memberId)).toBe(true);
+  });
+
+  it("the plain freeze approval still refuses incomplete records, and an all-incomplete register is not filed", async () => {
+    const { ctx, sec, ec, aud, cid, ms } = await noticed();
+    await breakTwo(ctx, ms);
+    const id = await propose(ctx, sec, "register.freeze", { contestId: cid });
+    await approve(ctx, ec, id);
+    await expect(approve(ctx, aud, id)).rejects.toMatchObject({ code: "incomplete_record" });
+    await ctx.db.query("UPDATE members SET state='resigned' WHERE id=$1", [ms[2].memberId]);
+    await expect(contests.freezeRegister(ctx, cid, { excludeIncomplete: true })).rejects.toMatchObject({ code: "empty_register" });
+  });
 });

@@ -27,7 +27,7 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
 
   app.addHook("onSend", async (_req, reply) => { reply.header("Access-Control-Allow-Origin", "*"); });
   app.setErrorHandler((e: any, _req, reply) => {
-    if (e instanceof DomainError) return reply.status(e.status).send({ error: e.code, message: e.message });
+    if (e instanceof DomainError) return reply.status(e.status).send({ error: e.code, message: e.message, ...(e.details !== undefined ? { details: e.details } : {}) });
     app.log.error(e);
     return reply.status(e.statusCode ?? 500).send({ error: "internal", message: e.statusCode ? e.message : "Internal error" });
   });
@@ -62,6 +62,7 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
   app.post("/admin/contests/:id/notice", guarded("notice.generate", (_a, req) => contests.generateNotice(ctx, req.params.id)));
   app.post("/admin/contests/:id/notice-receipt", guarded("receipt.record", (_a, req) => contests.recordNoticeReceipt(ctx, req.params.id, req.body.receipt).then(() => ({ ok: true }))));
   app.post("/admin/registers/:id/receipt", guarded("receipt.record", (_a, req) => contests.recordRegisterReceipt(ctx, req.params.id, req.body.receipt).then(() => ({ ok: true }))));
+  app.get("/admin/contests/:id/register-check", guarded("register.read", (_a, req) => contests.previewRegister(ctx, req.params.id)));
   app.get("/admin/registers/:id/export", guarded("register.read", (_a, req) => contests.exportRegister(ctx, req.params.id)));
   app.post("/admin/approvals", guarded("approval.propose", async (a, req) => ({ id: await admin.propose(ctx, a, req.body.action, req.body.payload) })));
   app.post("/admin/approvals/:id/approve", guarded("approval.approve", (a, req) => admin.approve(ctx, a, req.params.id)));

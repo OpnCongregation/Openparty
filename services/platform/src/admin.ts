@@ -87,7 +87,7 @@ const ACTIONS: Record<string, ActionSpec> = {
   },
   "register.freeze": {
     proposers: ["secretary"], approvers: ["electoral_committee", "auditor"], needed: 2,
-    run: (ctx, p) => contests.freezeRegister(ctx, p.contestId),
+    run: (ctx, p) => contests.freezeRegister(ctx, p.contestId, { excludeIncomplete: p.excludeIncomplete === true }),
   },
   "contest.open": {
     proposers: ["electoral_committee"], approvers: ["secretary", "auditor"], needed: 2,

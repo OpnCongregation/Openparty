@@ -100,6 +100,11 @@ CREATE TABLE IF NOT EXISTS register_members (
   register_id TEXT NOT NULL, member_id TEXT NOT NULL, PRIMARY KEY (register_id, member_id)
 );
 
+-- Active members left off a register because their record was incomplete (only when the admin chose to file the complete ones).
+CREATE TABLE IF NOT EXISTS register_exclusions (
+  register_id TEXT NOT NULL, member_id TEXT NOT NULL, card_no TEXT NOT NULL, missing TEXT NOT NULL, PRIMARY KEY (register_id, member_id)
+);
+
 CREATE TABLE IF NOT EXISTS finance_ledger (
   id BIGSERIAL PRIMARY KEY,
   kind TEXT NOT NULL CHECK (kind IN ('dues','gift')),
