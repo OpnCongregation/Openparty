@@ -1,7 +1,8 @@
 import type { Ctx } from "./context.js";
 import { DomainError } from "./errors.js";
 import { t, tSpecific } from "./i18n.js";
-import { confirmJoin, prepareJoin, verifyPin } from "./members.js";
+import { confirmJoin, missingRegisterFields, prepareJoin, verifyPin } from "./members.js";
+import { SELF_SERVICE_FIELDS, completeRecord } from "./record-notices.js";
 import { randomUUID } from "node:crypto";
 import { collectDues } from "./finance.js";
 
@@ -54,6 +55,20 @@ export async function handleUssd(ctx: Ctx, phone: string, text: string, sessionI
       if (s.length === 1) return con(t(ctx, "ussd.enterPin"));
       const m = await verifyPin(ctx, phone, s[1]);
       return end(t(ctx, "ussd.card", m.cardNo, m.state));
+    }
+    if (s[0] === "4") {
+      if (s.length === 1) return con(t(ctx, "ussd.enterPin"));
+      const m = await verifyPin(ctx, phone, s[1]);
+      const rec = await ctx.keys.decrypt<Record<string, string>>(m.id, (await ctx.db.query<{ record_enc: string }>("SELECT record_enc FROM members WHERE id=$1", [m.id]))[0].record_enc);
+      const missing = missingRegisterFields(rec, ctx.config.get<string[]>("register.fields"));
+      const mine = missing.filter((f) => (SELF_SERVICE_FIELDS as readonly string[]).includes(f));
+      const others = missing.filter((f) => !mine.includes(f));
+      const label = (f: string) => f.replace(/_/g, " ");
+      if (!mine.length) return end(others.length ? t(ctx, "ussd.record.agent", others.map(label).join(", ")) : t(ctx, "ussd.record.none"));
+      const answers = s.slice(2);
+      if (answers.length < mine.length) return con(t(ctx, "ussd.record.ask", label(mine[answers.length])));
+      await completeRecord(ctx, m.id, Object.fromEntries(mine.map((f, i) => [f, answers[i]])), { self: true });
+      return end(others.length ? t(ctx, "ussd.record.agent", others.map(label).join(", ")) : t(ctx, "ussd.record.done"));
     }
     return end(t(ctx, "ussd.bad"));
   } catch (e) {

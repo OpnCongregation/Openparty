@@ -128,18 +128,20 @@ export async function recordNoticeReceipt(ctx: Ctx, contestId: string, receipt: 
 
 // ---- Register ---------------------------------------------------------------------------------
 
+import { checkAppealPeriod, notifyExcluded } from "./record-notices.js";
+
 export interface IncompleteMember { memberId: string; cardNo: string; missing: string[] }
 
 /** Sort every active member into complete records (ready for the register) and incomplete ones (named, with the fields they lack). */
-async function sortRegisterCandidates(ctx: Ctx) {
+export async function sortRegisterCandidates(ctx: Ctx) {
   const members = await ctx.db.query<{ id: string; card_no: string; record_enc: string }>(
     "SELECT id, card_no, record_enc FROM members WHERE state='active' AND activated_at <= $1 ORDER BY card_no", [ctx.clock().toISOString()]);
   const complete: { id: string; row: RegisterRecord & { card_no: string } }[] = [];
-  const incomplete: IncompleteMember[] = [];
+  const incomplete: (IncompleteMember & { phone?: string })[] = [];
   for (const m of members) {
     const rec = await ctx.keys.decrypt<RegisterRecord>(m.id, m.record_enc);
     const missing = missingRegisterFields(rec, ctx.config.get<string[]>("register.fields"));
-    if (missing.length) { incomplete.push({ memberId: m.id, cardNo: m.card_no, missing }); continue; }
+    if (missing.length) { incomplete.push({ memberId: m.id, cardNo: m.card_no, missing, phone: rec.phone }); continue; }
     const { phone: _phone, ...legal } = rec;
     complete.push({ id: m.id, row: { card_no: m.card_no, ...legal } as any });
   }
@@ -158,7 +160,12 @@ export async function previewRegister(ctx: Ctx, contestId: string) {
     return { frozen: true, registerId: c.register_id, completeCount: filed[0].member_count, incomplete: ex.map((e) => ({ memberId: e.member_id, cardNo: e.card_no, missing: e.missing.split(",") })) };
   }
   const { complete, incomplete } = await sortRegisterCandidates(ctx);
-  return { frozen: false, completeCount: complete.length, incomplete };
+  const dueAt = new Date(new Date(c.vote_date).getTime() - ctx.config.get<number>("register.days_before_contest") * DAY);
+  const noticed = await Promise.all(incomplete.map(async (i) => ({
+    memberId: i.memberId, cardNo: i.cardNo, missing: i.missing,
+    firstNoticeAt: (await ctx.db.query<{ t: string | null }>("SELECT MIN(sent_at) AS t FROM record_notices WHERE member_id=$1 AND kind='incomplete'", [i.memberId]))[0].t,
+  })));
+  return { frozen: false, completeCount: complete.length, filingDeadline: dueAt.toISOString(), incomplete: noticed };
 }
 
 /**
@@ -180,9 +187,10 @@ export async function freezeRegister(ctx: Ctx, contestId: string, opts: { exclud
   if (incomplete.length && !opts.excludeIncomplete) {
     const shown = incomplete.slice(0, 20).map((i) => `${i.cardNo} missing: ${i.missing.join(", ")}`).join("; ");
     return fail("incomplete_record", `${incomplete.length} member record(s) incomplete: ${shown}${incomplete.length > 20 ? "; ..." : ""}. Fix them, or file the ${complete.length} complete records only.`, 422,
-      { completeCount: complete.length, incomplete });
+      { completeCount: complete.length, incomplete: incomplete.map(({ phone: _p, ...i }) => i) });
   }
-  if (!complete.length && incomplete.length) return fail("empty_register", "Every member record is incomplete, so there is nothing to file", 422, { incomplete });
+  if (incomplete.length) await checkAppealPeriod(ctx, incomplete, new Date(new Date(c.vote_date).getTime() - regDays * DAY));
+  if (!complete.length && incomplete.length) return fail("empty_register", "Every member record is incomplete, so there is nothing to file", 422, { incomplete: incomplete.map(({ phone: _p, ...i }) => i) });
   const rows = complete.map((m) => m.row);
   const exportJson = canonical({ contest_id: contestId, frozen_at: ctx.clock().toISOString(), members: rows });
   const fingerprint = sha256hex(exportJson);
@@ -198,6 +206,7 @@ export async function freezeRegister(ctx: Ctx, contestId: string, opts: { exclud
     await tx.query("UPDATE contests SET register_id=$2 WHERE id=$1", [contestId, id]);
     await ctx.events.emit(tx, { type: "register.frozen", data: { contest_id: contestId, register_id: id, fingerprint, member_count: rows.length, excluded_count: incomplete.length } });
   });
+  await notifyExcluded(ctx, id, incomplete);
   return { registerId: id, fingerprint, memberCount: rows.length, excludedCount: incomplete.length };
 }
 

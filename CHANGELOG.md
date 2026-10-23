@@ -12,6 +12,11 @@ All notable changes. This project uses [semantic versioning](https://semver.org/
   the admin can now **file only the complete records**: `GET /admin/contests/:id/register-check` lists the incomplete members (card number and missing fields), a
   failed freeze returns the same list as structured `details`, and a `register.freeze` approval with `excludeIncomplete: true` files the rest. Left-off members are kept in
   `register_exclusions` (they are not on the register, so `isEligible` is false), and the public log's `register.frozen` carries only `excluded_count`.
+  **Appeal period (no screen):** members with an incomplete record get SMS notices naming what is missing and, when a contest is coming, the register
+  filing date (weekly, then 3 days and 1 day before; undated and once when no contest is scheduled; failed SMS retried). They can complete the record at any time:
+  USSD option 4 for address, state, LGA, polling unit and disability status, or a ward agent (`POST /agent/complete-record`) for the rest; only EMPTY fields can be filled,
+  nothing on file is overwritten. Filing without incomplete members (`excludeIncomplete`) is refused (`appeal_open`) until each was notified and 7 days have passed, except
+  inside the last day before the deadline; left-off members get a one-time SMS and a `member.record_completed` event (no values) marks completion. 11 tests.
   Reopening a closed contest says `already_closed`. 6 tests in `election-gates.test.ts`.
 - The public-log guard is now an allowlist: listed event types, exact fields, strict value shapes (`logschema.ts`). Serialized
   personal data inside a string field, unlisted field names and unknown event types are refused. 8 adversarial tests added.

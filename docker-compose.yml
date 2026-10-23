@@ -56,6 +56,7 @@ services:
       # An approval claimed longer ago than this and still unfinished is taken over and finished by recovery (checked every APPROVAL_RECOVERY_SECONDS).
       APPROVAL_LEASE_SECONDS: ${APPROVAL_LEASE_SECONDS:-60}
       APPROVAL_RECOVERY_SECONDS: ${APPROVAL_RECOVERY_SECONDS:-30}
+      RECORD_NOTICE_SECONDS: ${RECORD_NOTICE_SECONDS:-3600}
       # scrypt (PIN hashing) runs on libuv's thread pool; its default size is 4.
       UV_THREADPOOL_SIZE: ${UV_THREADPOOL_SIZE:-8}
       # The USSD webhook only runs for a caller that sends this secret (the gateway). Give the same value to the gateway.

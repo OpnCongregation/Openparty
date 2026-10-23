@@ -3,6 +3,7 @@ import { approve, propose } from "../src/admin.js";
 import * as contests from "../src/contests.js";
 import { DAY } from "../src/context.js";
 import { erase, resign } from "../src/members.js";
+import { sendRecordNotices } from "../src/record-notices.js";
 import { joinAndActivate, makeAdmin, setup } from "./helpers.js";
 
 async function noticed() {
@@ -102,8 +103,9 @@ describe("election gates", () => {
   }
 
   it("preview names the incomplete members; the admin can file only the complete ones", async () => {
-    const { ctx, log, sec, ec, aud, cid, ms } = await noticed();
+    const { ctx, log, sec, ec, aud, cid, ms, advance } = await noticed();
     await breakTwo(ctx, ms);
+    await sendRecordNotices(ctx); advance(8); // the appeal period
     const pv: any = await contests.previewRegister(ctx, cid);
     expect(pv).toMatchObject({ frozen: false, completeCount: 1 });
     expect(pv.incomplete).toHaveLength(2);
@@ -133,12 +135,13 @@ describe("election gates", () => {
   });
 
   it("the plain freeze approval still refuses incomplete records, and an all-incomplete register is not filed", async () => {
-    const { ctx, sec, ec, aud, cid, ms } = await noticed();
+    const { ctx, sec, ec, aud, cid, ms, advance } = await noticed();
     await breakTwo(ctx, ms);
     const id = await propose(ctx, sec, "register.freeze", { contestId: cid });
     await approve(ctx, ec, id);
     await expect(approve(ctx, aud, id)).rejects.toMatchObject({ code: "incomplete_record" });
     await ctx.db.query("UPDATE members SET state='resigned' WHERE id=$1", [ms[2].memberId]);
+    await sendRecordNotices(ctx); advance(8);
     await expect(contests.freezeRegister(ctx, cid, { excludeIncomplete: true })).rejects.toMatchObject({ code: "empty_register" });
   });
 });

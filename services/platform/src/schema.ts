@@ -105,6 +105,20 @@ CREATE TABLE IF NOT EXISTS register_exclusions (
   register_id TEXT NOT NULL, member_id TEXT NOT NULL, card_no TEXT NOT NULL, missing TEXT NOT NULL, PRIMARY KEY (register_id, member_id)
 );
 
+-- SMS notices about incomplete records (the appeal period): when each member was told, what was missing, and the filing date given.
+CREATE TABLE IF NOT EXISTS record_notices (
+  id BIGSERIAL PRIMARY KEY,
+  member_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('incomplete','excluded')),
+  sent_at TIMESTAMPTZ NOT NULL,
+  due_at TIMESTAMPTZ,
+  missing TEXT,
+  stage INT,
+  resolved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS record_notices_member ON record_notices(member_id, kind);
+CREATE UNIQUE INDEX IF NOT EXISTS record_notices_excluded_once ON record_notices(member_id, missing) WHERE kind='excluded';
+
 CREATE TABLE IF NOT EXISTS finance_ledger (
   id BIGSERIAL PRIMARY KEY,
   kind TEXT NOT NULL CHECK (kind IN ('dues','gift')),

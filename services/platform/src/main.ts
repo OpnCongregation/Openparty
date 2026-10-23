@@ -5,6 +5,7 @@ import { recoverApprovals } from "./admin.js";
 import { buildServer } from "./server.js";
 import { HttpTrustLog } from "./adapters.js";
 import { registerLab } from "./lab.js";
+import { sendRecordNotices } from "./record-notices.js";
 import { recordDeployment } from "./framework/deploy.js";
 
 const envNum = (k: string) => (process.env[k] ? Number(process.env[k]) : undefined);
@@ -43,6 +44,10 @@ const leaseSeconds = Number(process.env.APPROVAL_LEASE_SECONDS ?? 60);
 const recover = () => recoverApprovals(ctx, leaseSeconds).then((r) => { if (r.recovered || r.failed) console.log(`approvals: recovered ${r.recovered}, gave up on ${r.failed}`); }).catch((e) => console.error("approval recovery:", e?.message ?? e));
 void recover();
 setInterval(recover, Number(process.env.APPROVAL_RECOVERY_SECONDS ?? 30) * 1000).unref();
+// Tell members with incomplete records (and repeat the reminders as the register deadline nears). Safe on every instance.
+const notices = () => sendRecordNotices(ctx).then((r) => { if (r.sent || r.failed) console.log(`record notices: sent ${r.sent}, failed ${r.failed}`); }).catch((e) => console.error("record notices:", e?.message ?? e));
+void notices();
+setInterval(notices, Number(process.env.RECORD_NOTICE_SECONDS ?? 3600) * 1000).unref();
 for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { ctx.events.stop(); void ctx.events.flush().finally(() => process.exit(0)); });
 
 const app = buildServer(ctx, {

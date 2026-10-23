@@ -4,6 +4,7 @@ import { DomainError } from "./errors.js";
 import * as admin from "./admin.js";
 import * as members from "./members.js";
 import * as contests from "./contests.js";
+import { completeRecord } from "./record-notices.js";
 import * as finance from "./finance.js";
 import * as participation from "./participation.js";
 import { registerUssd, type UssdOptions } from "./ussd-guard.js";
@@ -55,6 +56,7 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
   // Ward agent
   app.post("/agent/activate", guarded("member.activate", (a, req) => members.activateMember(ctx, a, req.body).then(() => ({ ok: true }))));
 
+  app.post("/agent/complete-record", guarded("member.activate", (a, req) => completeRecord(ctx, req.body.memberId, req.body.fields ?? {}, { agent: a })));
   app.post("/agent/unlock-pin", guarded("member.activate", (a, req) => members.unlockPin(ctx, a, req.body.memberId).then(() => ({ ok: true }))));
 
   // Admin
