@@ -22,6 +22,14 @@ All notable changes. This project uses [semantic versioning](https://semver.org/
   software keys, `docs/key-management.md`. Existing data keeps opening (the single key is `k0`).
 - README states plainly that this is not an electronic voting system.
 
+### Findings F-10 to F-14
+- **Approvals** apply their effect, result, `executed` mark and public event in ONE transaction; claims have a token and a lease; `recoverApprovals` finishes the ones whose executor died. Test-only `ctx.crashAt` fault hook; 10 crash tests and a live kill test.
+- **Durable security counters:** failed gateway authentication moved to a LOGGED table; volume counters stay UNLOGGED by decision.
+- **PIN policy:** durable attempt log, rolling 24 h window (5) and 30-day hard lock (10), successes never erase failures; new ward-agent **PIN unlock** (`POST /agent/unlock-pin`, `member.pin_unlocked` event) because a lock was previously permanent.
+- **Payments:** a retry now repairs a missing public event; `verify:consistency` checks every ledger row against its event.
+- **Keys:** asynchronous `KeyProvider`; **Vault Transit provider**; lookup **pepper ring** with `npm run rotate-pepper` and a fixed reference pepper; `npm run replay-erasures` for restores; `scripts/backup-drill.mjs`; rewritten `docs/key-management.md`.
+- Compose: `vault` profile (development Vault), `APPROVAL_LEASE_SECONDS`, Vault and pepper settings.
+
 ### Resilience
 - **Transactional outbox:** every change and its public-log event commit in one database transaction; a publisher delivers them in
   order; the log ignores a repeated event key. A crash between the database write and the log append can no longer lose an event.

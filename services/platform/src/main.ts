@@ -1,5 +1,7 @@
 import { createCtx } from "./platform.js";
-import { keyProviderFromEnv } from "./crypto.js";
+import { pepperRingFromEnv } from "./crypto.js";
+import { loadKeyProvider } from "./vault-provider.js";
+import { recoverApprovals } from "./admin.js";
 import { buildServer } from "./server.js";
 import { HttpTrustLog } from "./adapters.js";
 import { registerLab } from "./lab.js";
@@ -7,7 +9,8 @@ import { recordDeployment } from "./framework/deploy.js";
 
 const envNum = (k: string) => (process.env[k] ? Number(process.env[k]) : undefined);
 const logUrl = process.env.TRUSTLOG_URL;
-const keyProvider = keyProviderFromEnv(process.env);
+const keyProvider = await loadKeyProvider(process.env);
+const peppers = pepperRingFromEnv(process.env);
 // The only key provider so far holds the master key in this process's memory. That is not an HSM, so a production
 // start must say so explicitly instead of looking compliant by accident.
 if (process.env.NODE_ENV === "production" && (!keyProvider || keyProvider.software) && process.env.ALLOW_SOFTWARE_KEYS !== "1")
@@ -15,12 +18,13 @@ if (process.env.NODE_ENV === "production" && (!keyProvider || keyProvider.softwa
 const ctx = await createCtx({
   databaseUrl: process.env.DATABASE_URL,
   keyProvider,
-  pepperHex: process.env.PEPPER_HEX,
+  peppers,
   log: logUrl ? new HttpTrustLog(logUrl, process.env.APPEND_TOKEN ?? "") : undefined,
 });
 if (!keyProvider)
   console.warn("No master key set (MASTER_KEY_HEX or MASTER_KEYS): using a random key. Data will be unreadable after restart. Dev only.");
 else if (keyProvider.software) console.warn(`Software master key ring in use (active "${keyProvider.activeId}"). Not an HSM; see docs/key-management.md.`);
+else console.log(`Master keys are held by the key service (active ${keyProvider.activeId}).`);
 
 const dep = await recordDeployment(ctx);
 console.log(`configuration ${ctx.config.fingerprint.slice(0, 16)}… (${ctx.config.pack.id} v${ctx.config.pack.version} + ${ctx.config.party.party})${dep.changed ? " recorded on the public log" : " unchanged"}`);
@@ -34,6 +38,11 @@ if (!ussdSecret) console.warn("USSD_WEBHOOK_SECRET not set: only the lab simulat
 
 // Publish committed events to the public log in the background: this heals the gap left by a crash between commit and publish.
 ctx.events.start();
+// Finish approvals whose executor died between claiming and applying them (at startup, then every 30 s; safe on every instance).
+const leaseSeconds = Number(process.env.APPROVAL_LEASE_SECONDS ?? 60);
+const recover = () => recoverApprovals(ctx, leaseSeconds).then((r) => { if (r.recovered || r.failed) console.log(`approvals: recovered ${r.recovered}, gave up on ${r.failed}`); }).catch((e) => console.error("approval recovery:", e?.message ?? e));
+void recover();
+setInterval(recover, Number(process.env.APPROVAL_RECOVERY_SECONDS ?? 30) * 1000).unref();
 for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { ctx.events.stop(); void ctx.events.flush().finally(() => process.exit(0)); });
 
 const app = buildServer(ctx, {

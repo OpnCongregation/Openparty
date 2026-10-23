@@ -60,6 +60,11 @@ CREATE TABLE IF NOT EXISTS approvals (
 -- 'executing' is the claim taken by the one request that runs the action (older databases lack it in the CHECK).
 ALTER TABLE approvals DROP CONSTRAINT IF EXISTS approvals_status_check;
 ALTER TABLE approvals ADD CONSTRAINT approvals_status_check CHECK (status IN ('pending','executing','executed','failed'));
+-- Execution lease: whoever holds claim_token may apply the action; a claim older than the lease can be taken over (admin.ts).
+ALTER TABLE approvals ADD COLUMN IF NOT EXISTS claim_token TEXT;
+ALTER TABLE approvals ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
+ALTER TABLE approvals ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
+ALTER TABLE approvals ADD COLUMN IF NOT EXISTS executed_at TIMESTAMPTZ;
 CREATE TABLE IF NOT EXISTS approval_votes (
   approval_id TEXT NOT NULL, admin_id TEXT NOT NULL, PRIMARY KEY (approval_id, admin_id)
 );
@@ -141,8 +146,27 @@ CREATE TABLE IF NOT EXISTS pending_joins (
   enc TEXT NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL
 );
--- Request counters shared by every platform instance. UNLOGGED: no write-ahead cost, and losing it in a database crash
--- only resets counters. Old windows are deleted as new ones are written.
+-- Every PIN guess is recorded BEFORE it is compared and only its own row is removed on success, so a successful login can never
+-- erase earlier failures. LOGGED (crash-durable) on purpose: this is the control that limits PIN guessing.
+CREATE TABLE IF NOT EXISTS pin_attempts (
+  id BIGSERIAL PRIMARY KEY,
+  member_id TEXT NOT NULL,
+  at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pin_attempts_member ON pin_attempts(member_id, at);
+-- One-time move of the old per-member counter into attempt rows (the old counter is zeroed in the same statement, so this never repeats).
+WITH m AS (SELECT id, pin_failures AS n FROM members WHERE pin_failures > 0),
+     ins AS (INSERT INTO pin_attempts(member_id, at) SELECT m.id, now() FROM m, generate_series(1, m.n))
+UPDATE members SET pin_failures = 0 WHERE id IN (SELECT id FROM m);
+-- Crash-durable counters for security-critical limits (failed gateway authentication). See ratelimit.ts for the split.
+CREATE TABLE IF NOT EXISTS rate_limits_durable (
+  key TEXT NOT NULL,
+  window_start BIGINT NOT NULL,
+  n INT NOT NULL,
+  PRIMARY KEY (key, window_start)
+);
+-- Volume counters, shared by every platform instance. UNLOGGED: no write-ahead cost, and losing it in a database crash
+-- only resets ordinary traffic budgets (never a guess limit). Old windows are deleted as new ones are written.
 CREATE UNLOGGED TABLE IF NOT EXISTS rate_limits (
   key TEXT NOT NULL,
   window_start BIGINT NOT NULL,

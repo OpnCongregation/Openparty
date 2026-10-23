@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { openDb } from "./db.js";
-import { KeyStore, type KeyProvider } from "./crypto.js";
+import { KeyStore, type KeyProvider, type PepperRing } from "./crypto.js";
 import type { Ctx } from "./context.js";
 import { Outbox } from "./outbox.js";
 import { MemoryTrustLog, SimNgNinAdapter, SimPayments, SimSms, type IdAdapter, type Payments, type Sms, type TrustLog } from "./adapters.js";
@@ -13,6 +13,8 @@ export interface PlatformOptions {
   /** Overrides masterKeyHex: a key ring or an HSM/KMS-backed provider. */
   keyProvider?: KeyProvider;
   pepperHex?: string;
+  /** Overrides pepperHex: the lookup pepper ring plus the stable public-reference pepper. */
+  peppers?: PepperRing;
   log?: TrustLog;
   /** Floor + law pack + party settings. Defaults to the bundled reference configuration. */
   config?: Config;
@@ -42,7 +44,7 @@ export async function createCtx(o: PlatformOptions = {}): Promise<Ctx> {
   const events = new Outbox(db, log);
   return {
     db,
-    keys: new KeyStore(db, o.keyProvider ?? key(o.masterKeyHex), key(o.pepperHex)),
+    keys: new KeyStore(db, o.keyProvider ?? key(o.masterKeyHex), (o.peppers ?? key(o.pepperHex))),
     config,
     idAdapter,
     sms: o.sms ?? new SimSms(),

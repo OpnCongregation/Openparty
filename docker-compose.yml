@@ -53,6 +53,9 @@ services:
       APPEND_TOKEN: ${APPEND_TOKEN}
       LAB_ENABLED: ${LAB_ENABLED:-0}
       NODE_ENV: production
+      # An approval claimed longer ago than this and still unfinished is taken over and finished by recovery (checked every APPROVAL_RECOVERY_SECONDS).
+      APPROVAL_LEASE_SECONDS: ${APPROVAL_LEASE_SECONDS:-60}
+      APPROVAL_RECOVERY_SECONDS: ${APPROVAL_RECOVERY_SECONDS:-30}
       # scrypt (PIN hashing) runs on libuv's thread pool; its default size is 4.
       UV_THREADPOOL_SIZE: ${UV_THREADPOOL_SIZE:-8}
       # The USSD webhook only runs for a caller that sends this secret (the gateway). Give the same value to the gateway.
@@ -66,6 +69,17 @@ services:
       ALLOW_SOFTWARE_KEYS: ${ALLOW_SOFTWARE_KEYS:-0}
       MASTER_KEYS: ${MASTER_KEYS:-}
       MASTER_KEY_ACTIVE: ${MASTER_KEY_ACTIVE:-}
+      # Master keys in HashiCorp Vault Transit instead of memory (KEY_PROVIDER=vault; see docs/key-management.md). Then the key never
+      # leaves Vault and ALLOW_SOFTWARE_KEYS is not needed.
+      KEY_PROVIDER: ${KEY_PROVIDER:-software}
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+      VAULT_TRANSIT_KEY: ${VAULT_TRANSIT_KEY:-openparty-master}
+      VAULT_CREATE_IF_MISSING: ${VAULT_CREATE_IF_MISSING:-}
+      # Lookup peppers can be rotated (npm run rotate-pepper); REF_PEPPER_HEX (public-log pseudonyms, donor keys) must never change.
+      PEPPERS: ${PEPPERS:-}
+      PEPPER_ACTIVE: ${PEPPER_ACTIVE:-}
+      REF_PEPPER_HEX: ${REF_PEPPER_HEX:-}
     volumes: ["./reports:/reports:ro"]
     depends_on:
       postgres: { condition: service_healthy }
@@ -73,6 +87,15 @@ services:
     # Loopback only: admin routes, the USSD webhook and the lab must not be reachable straight from the network.
     # Production: terminate TLS in a reverse proxy on the host or in the compose network and expose only the routes it needs.
     ports: ["127.0.0.1:3000:3000"]
+
+  # A DEVELOPMENT Vault (in memory, root token "root"): for trying KEY_PROVIDER=vault locally with `docker compose --profile vault up`.
+  # Production Vault needs persistent storage, TLS, auto-unseal (ideally an HSM or cloud KMS seal), HA and least-privilege policies.
+  vault:
+    profiles: ["vault"]
+    image: hashicorp/vault:1.15
+    cap_add: ["IPC_LOCK"]
+    environment: { VAULT_DEV_ROOT_TOKEN_ID: root, VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200" }
+    ports: ["127.0.0.1:8200:8200"]
 
   portal:
     restart: unless-stopped

@@ -54,6 +54,7 @@ const EVENTS: Record<string, Record<string, Kind>> = {
   "member.joined": { member_ref: "ref" },
   "member.activated": { member_ref: "ref", agent_id: "uuid", ward: "label" },
   "member.resigned": { member_ref: "ref" },
+  "member.pin_unlocked": { member_ref: "ref", agent_id: "uuid" },
   "member.erased": { member_ref: "ref" },
   "deployment.configured": {
     fingerprint: "hash", floor_version: "version", pack_id: "code", pack_version: "version", pack_status: "token", pack_signature: "token",

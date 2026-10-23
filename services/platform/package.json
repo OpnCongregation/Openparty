@@ -10,6 +10,8 @@
     "start": "tsx src/main.ts",
     "rotate-keys": "tsx src/rotate-keys.ts",
     "verify:consistency": "tsx src/verify-consistency.ts",
+    "rotate-pepper": "tsx src/rotate-pepper.ts",
+    "replay-erasures": "tsx src/replay-erasures.ts",
     "validate:packs": "tsx src/framework/cli.ts"
   },
   "dependencies": {

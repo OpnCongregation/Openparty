@@ -45,7 +45,8 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
   app.get("/healthz", async () => {
     const outbox = await ctx.events.stats();
     const late = outbox.oldestPendingSeconds !== null && outbox.oldestPendingSeconds > 60;
-    return { status: late ? "degraded" : "ok", outbox };
+    const stuck = (await ctx.db.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM approvals WHERE status='executing' AND claimed_at < $1", [new Date(Date.now() - 120_000).toISOString()]))[0].n;
+    return { status: late || stuck > 0 ? "degraded" : "ok", outbox, approvalsStuck: stuck };
   });
 
   // USSD gateway webhook (Africa's Talking format): authenticated, validated and rate limited. See ussd-guard.ts.
@@ -53,6 +54,8 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
 
   // Ward agent
   app.post("/agent/activate", guarded("member.activate", (a, req) => members.activateMember(ctx, a, req.body).then(() => ({ ok: true }))));
+
+  app.post("/agent/unlock-pin", guarded("member.activate", (a, req) => members.unlockPin(ctx, a, req.body.memberId).then(() => ({ ok: true }))));
 
   // Admin
   app.post("/admin/contests", guarded("contest.create", async (_a, req) => ({ id: await contests.createContest(ctx, { ...req.body, voteDate: new Date(req.body.voteDate) }) })));

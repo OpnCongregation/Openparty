@@ -179,6 +179,9 @@ export const SCENARIOS: Scenario[] = [
       });
       for (let i = 1; i <= 5; i++) await r.blocked(`Wrong PIN, attempt ${i}`, "PIN lockout", "pin_wrong", () => members.verifyPin(r.ctx, phone, "9999"));
       await r.blocked("Correct PIN after five failures", "PIN lockout", "pin_locked", () => members.verifyPin(r.ctx, phone, "1234"));
+      await r.blocked("A secretary tries to unlock her", "Roles", "forbidden", () => members.unlockPin(r.ctx, sec, memberId));
+      await r.ok("Her own ward agent unlocks her after meeting her", "PIN lockout", async () => { await members.unlockPin(r.ctx, w1, memberId); return "Failures cleared; a public pin_unlocked event is logged."; });
+      await r.ok("Her correct PIN works again", "PIN lockout", async () => { const v = await members.verifyPin(r.ctx, phone, "1234"); return `Card ${v.cardNo}, ${v.state}.`; });
     },
   },
   {

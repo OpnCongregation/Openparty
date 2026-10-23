@@ -1,6 +1,6 @@
 # Security review follow-up, October 2026
 
-Two review passes raised eleven findings, and a third pass (section "Follow-up") three more. This records what was changed, what proves it, and what **cannot** be settled in code.
+Review passes raised eleven findings, then three more (section "Follow-up"), then five more (F-10 to F-14, section "Follow-up 2"). This records what was changed, what proves it, and what **cannot** be settled in code.
 It is a self-assessment by the project, not an audit. No independent party has reviewed this code.
 
 Status key: **Fixed** = changed and covered by tests. **Partly** = the code part is done, the rest needs a person or a service.
@@ -21,6 +21,11 @@ Status key: **Fixed** = changed and covered by tests. **Partly** = the code part
 | F-09 | Payment idempotency and reconciliation | **Partly** |
 | C-1 | A crash between the database write and the log append leaves an event missing | **Fixed** (transactional outbox) |
 | C-2 | Rate limits are per process: reset on restart, not shared across instances | **Fixed** (platform: shared through PostgreSQL; log: persisted, single instance by design) |
+| F-10 | Approval actions can become permanently stuck | **Fixed** (effect and mark are one transaction; lease recovery; tested at every transition and with live kills) |
+| F-11 | Rate-limit state can disappear after a database crash | **Fixed** for security counters (crash-durable table); volume counters may reset by decision; tested with a live database SIGKILL |
+| F-12 | A successful PIN check erased failure counts (and nothing could unlock a PIN) | **Fixed** (rolling window, hard lock, agent unlock) |
+| F-13 | Payment retries could leave the audit trail incomplete | **Fixed** (retry repairs a missing event; checker covers every ledger row) |
+| F-14 | Key erasure and pepper rotation not operationalized | **Partly**: Vault provider, pepper rotation, restore replay and a rehearsal are built and tested; a production Vault and the backup policy are owner work |
 | C-3 | Power-loss recovery and real-deployment load untested | **Partly**: tools, simulations and local measurements done; real power cut and real-deployment load are **owner-run** |
 
 ## What was fixed
@@ -94,7 +99,7 @@ waiting forever. `npm run verify:consistency` compares the database with every l
 "degraded" if an event waits over a minute. Also fixed on the way: a donor cap check that two simultaneous gifts could both pass
 (now serialised per donor inside the same transaction as the insert). Evidence: 22 tests in `test/resilience.test.ts`, 8 Go tests for the key, the crash run in
 [load-test.md](load-test.md) (347 joins and 334 payments: database and log agree exactly), and 2,909 events matched on the demo stack.
-Residual: an approval whose action committed but whose "executed" mark did not is left in `executing`; the checker reports it, nothing repairs it.
+(An approval stuck in `executing` was a residual here; it is fixed in F-10 below.)
 
 **C-2 Shared rate limits.** Platform limits (per phone, failed authentication, simulator, gateway ceiling) count in PostgreSQL
 (`UNLOGGED rate_limits`, blended sliding window) behind a local in-memory layer, so they hold across restarts and several instances.
@@ -110,13 +115,50 @@ four crash shapes), a SIGKILL harness (30 kills), `trustlog verify` and `trustlo
 PostgreSQL (157 tests pass; this also found a real bug: `BIGINT` columns are strings on a real server, fixed). The load test found
 that PIN hashing blocked the whole process (now asynchronous; throughput roughly doubled). A crash test also showed the platform exiting when
 a database connection died while idle (now logged and reconnected), and the compose file now restarts services (`restart: unless-stopped`).
+## Follow-up 2: F-10 to F-14
+
+**F-10 Approvals.** The action used to commit in its own transaction and "executed" in another, so a crash between left an effect with no mark. Now they are one
+transaction: `runClaimed` runs the action on a transaction-scoped context (`scopedCtx`: reads, writes, keys and events all on the same handle), then writes the
+`executed` mark, the result and the public event in that same transaction. So `executing` can only mean "not applied yet". A claim carries a token and a lease; the
+token is checked inside the executing transaction, so a claimant that was only slow cannot apply the action after someone else took over. `recoverApprovals` (startup, then
+every 30 s, on every instance) re-claims expired leases and finishes them, giving up after three failed attempts. `/healthz` reports `approvalsStuck`.
+Evidence: `test/approvals-crash.test.ts` (10 tests: a crash at each of four transitions, two concurrent recoverers, a late claimant, an action that is now refused, give-up,
+and the multi-step register freeze) and `scripts/chaos-approvals.mjs` (signed admin requests while the platform and database are SIGKILLed: 108 and 93 approvals applied,
+rule versions == `rule.set` events == `approval.executed` events, nothing left in `executing`).
+
+**F-11 Which counters may reset.** Decided explicitly. Must survive a database crash: failed gateway authentication per address (`rate_limits_durable`, a LOGGED table)
+and all PIN failure tracking (`pin_attempts`, logged). May reset: per-phone volume, the gateway ceiling and the simulator limit (`rate_limits`, UNLOGGED), because a reset
+only grants another window of ordinary traffic and no guess depends on it. Evidence: `scripts/crash-durability.mjs` exhausts the authentication budget (429), SIGKILLs
+PostgreSQL, restarts it, and the address is still throttled; a member's PIN is locked, PostgreSQL is SIGKILLed, and it is still locked. A test checks the table kinds (`pg_class`).
+Still recommended: a second, independent limit at the reverse proxy.
+
+**F-12 PIN throttling.** Every guess is recorded before it is compared (under a per-member lock) and a successful login deletes only its own record. Policy: 5 failed guesses
+in a rolling 24 hours lock the PIN until the oldest ages out; 10 in 30 days lock it until a ward agent unlocks it; a locked PIN refuses even the correct PIN (accepting it
+would be an oracle). New: `unlockPin` (a ward agent, for a member in their ward, or any agent for a provisional member with no ward yet) with a public `member.pin_unlocked`
+event and `POST /agent/unlock-pin`: before this a locked PIN stayed locked for good although the message said "see your ward agent". Evidence: `test/pin-policy.test.ts`
+(11 tests including alternating logins and guesses, 30 concurrent requests, window rollover and the 30-day hard lock). **Trade-off, stated plainly:** an attacker can lock a
+victim's PIN with five wrong guesses; the unlock path and the 24-hour expiry are the remedy, and the per-gateway and per-phone limits bound how often it can be repeated.
+
+**F-13 Payments.** Ledger row, attempt state and public event already committed together since the outbox, so a crash after the ledger insert rolls everything back and the retry
+redoes it (tested). For rows written before that, adopting an existing ledger row now checks for its event and re-emits it in the same transaction if missing. `verify:consistency`
+now checks every ledger row against its event. Evidence: `test/payment-audit.test.ts` (crash after the insert; a legacy row with no event repaired; no second event; no second charge).
+
+**F-14 Key lifecycle.** Built: an asynchronous `KeyProvider`; a **Vault Transit provider** (non-exportable master key; rotation; rewrap; destruction by raising the minimum decryption
+version) tested against a real Vault with `node scripts/test-vault.mjs` (8 tests, including: a wrapped key is bound to its member; an older backup becomes permanently unreadable once the
+old version is destroyed; join, read and erase end to end); a **pepper ring** with a rotation tool (`npm run rotate-pepper`; tested mid-rotation, after, and that dropping the old pepper
+without rotating loses members) and a deliberately fixed reference pepper for public pseudonyms and donor keys; `replayErasures` to re-apply the public log's erasures after a restore;
+and `scripts/backup-drill.mjs`, which rehearses it on the Docker stack (dump, erase, restore: record readable again; replay: unreadable; rotate and destroy: older backup unreadable).
+The drill also caught a bug in its own first version (it published to an in-memory sink and marked live events published); `verify:consistency` found it, it was repaired, and scratch
+databases now never touch the real log.
+**Still open:** a production Vault (storage, TLS, auto-unseal with an HSM or cloud-KMS seal, HA, policies); AWS/GCP/Azure providers (not written, not testable here); a written backup
+policy and a restore drill on the real backup system; physical remnants (dead tuples, WAL, snapshots) are not reachable by any script, so the policy depends on key destruction and encrypted disks.
+
 ## Smaller things noticed
 
-- If a payment was recorded by an earlier run that died before updating its attempt, the retry adopts the existing ledger row and does not re-emit its event (rare; it predates the outbox).
 - The witnesses run on the same host as the log in the demo stack; real witnesses are independent parties.
-- A successful PIN check resets the failure counter to zero, so an attacker timing guesses around a legitimate login could gain a few extra attempts.
-- Pepper rotation has no tool (`docs/key-management.md`).
-
+- Rate limiters for volume are shared through PostgreSQL but the in-process layer in front of them forgets on restart (harmless: the shared layer still counts).
+- The unlock path trusts a ward agent's word that they met the member; the access log and the public event are the check.
+- The reference pepper cannot be rotated without unlinking old pseudonyms (by design, documented).
 ## Verification
 
 See the Session 11 entry in `SESSION_CONTEXT.md` for the test counts at the time of writing.

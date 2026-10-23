@@ -2,10 +2,11 @@
 //   MASTER_KEYS="k1:<hex>,k2:<hex>" MASTER_KEY_ACTIVE=k2 DATABASE_URL=... npm run rotate-keys
 // The old key may be destroyed only after this reports it unused AND every database backup that still needs it has
 // expired or been destroyed (docs/key-management.md). Nothing here deletes a key.
-import { KeyStore, keyProviderFromEnv } from "./crypto.js";
+import { KeyStore } from "./crypto.js";
+import { loadKeyProvider } from "./vault-provider.js";
 import { openDb } from "./db.js";
 
-const provider = keyProviderFromEnv(process.env);
+const provider = await loadKeyProvider(process.env);
 if (!provider) throw new Error("Set MASTER_KEYS (and MASTER_KEY_ACTIVE) or MASTER_KEY_HEX.");
 if (!process.env.DATABASE_URL) throw new Error("Set DATABASE_URL: rotation works on the real database.");
 

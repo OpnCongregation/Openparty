@@ -35,19 +35,27 @@ export class MemoryLimiter implements Limiter {
  */
 export class PgLimiter implements Limiter {
   private calls = 0;
-  constructor(private db: Db, private scope: string, private max: number, private windowMs: number, private now: () => number = Date.now) {}
+  private table: string;
+  /**
+   * durable: true keeps the counters in a crash-durable (LOGGED) table. Use it for anything an attacker would profit from
+   * resetting (failed authentication). Volume throttles may use the default UNLOGGED table: losing them only grants one more
+   * window of ordinary traffic.
+   */
+  constructor(private db: Db, private scope: string, private max: number, private windowMs: number, private now: () => number = Date.now, opts: { durable?: boolean } = {}) {
+    this.table = opts.durable ? "rate_limits_durable" : "rate_limits";
+  }
 
   async take(key: string): Promise<boolean> {
     const t = this.now();
     const w = Math.floor(t / this.windowMs);
     const k = `${this.scope}:${key}`;
     const cur = (await this.db.query<{ n: number }>(
-      `INSERT INTO rate_limits(key,window_start,n) VALUES ($1,$2,1)
-       ON CONFLICT (key,window_start) DO UPDATE SET n = rate_limits.n + 1 RETURNING n`, [k, w]))[0].n;
-    const prevRow = await this.db.query<{ n: number }>("SELECT n FROM rate_limits WHERE key=$1 AND window_start=$2", [k, w - 1]);
+      `INSERT INTO ${this.table}(key,window_start,n) VALUES ($1,$2,1)
+       ON CONFLICT (key,window_start) DO UPDATE SET n = ${this.table}.n + 1 RETURNING n`, [k, w]))[0].n;
+    const prevRow = await this.db.query<{ n: number }>(`SELECT n FROM ${this.table} WHERE key=$1 AND window_start=$2`, [k, w - 1]);
     const prev = prevRow.length ? prevRow[0].n : 0;
     const frac = (t % this.windowMs) / this.windowMs; // how far into the current window we are
-    if (++this.calls % 500 === 0) void this.db.query("DELETE FROM rate_limits WHERE window_start < $1", [w - 1]).catch(() => undefined);
+    if (++this.calls % 500 === 0) void this.db.query(`DELETE FROM ${this.table} WHERE window_start < $1`, [w - 1]).catch(() => undefined);
     return prev * (1 - frac) + cur <= this.max;
   }
 }

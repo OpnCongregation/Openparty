@@ -79,12 +79,15 @@ one-way hash for "one person, one membership". Adapters must pass the public con
   proxy it sees the proxy: limit at the proxy as well.
 - **USSD webhook.** `POST /ussd` exists only when `USSD_WEBHOOK_SECRET` is set, compares it in constant time, optionally checks
   `USSD_ALLOWED_IPS`, validates the payload and rate limits: failed authentications per address, requests per phone, a high ceiling per gateway address (counts shared through the database). `POST /ussd/sim` (no secret) exists only
-  when `LAB_ENABLED=1`. A phone number from the gateway is a claim; PIN attempts are counted atomically (5 per member) because
-  a 4-digit PIN is only as strong as that counter.
+  when `LAB_ENABLED=1`. A phone number from the gateway is a claim; PIN guesses are limited per account (see the PIN policy below) because
+  a 4-digit PIN is only as strong as that limit.
 - **Money.** Every dues collection is a `payment_attempts` row written before the provider is called and keyed by the gateway
   session; the provider receives the same idempotency key on retries. `reconcile` reports payments charged but not recorded,
   unconfirmed, or refused after being taken; `POST /admin/finance/retry-payments` finishes the first kind.
-- **Approvals** run exactly once: vote, count and the pending to executing claim happen in one transaction under a row lock.
+- **Approvals** run exactly once. Vote, count and the pending to executing claim are one transaction under a row lock; the action's effects, the `executed` mark, its result and its public event are a second single transaction (on a transaction-scoped context), with the claim token checked inside it. A crash therefore leaves either nothing applied or everything applied; `recoverApprovals` re-claims expired leases (startup and every 30 s, any instance) and finishes them.
+- **Which counters may reset.** Must survive a database crash (LOGGED tables): failed gateway authentication (`rate_limits_durable`) and PIN attempts (`pin_attempts`). May reset (UNLOGGED `rate_limits`): per-phone volume, the gateway ceiling, the simulator.
+- **PIN policy.** Every guess is recorded before it is compared and a success removes only its own record: 5 failures in a rolling 24 h lock until the oldest ages out, 10 in 30 days lock until a ward agent unlocks (`POST /agent/unlock-pin`). A locked PIN refuses even the right PIN.
+- **Key lifecycle.** Master keys live in the software ring or in Vault Transit (`KEY_PROVIDER=vault`); lookup peppers are a rotatable ring, the public-reference pepper is fixed; erasures are replayed after a restore. See [key-management.md](key-management.md).
 - PIN hashing (scrypt) runs asynchronously on the thread pool and is the platform's capacity limit; see [load-test.md](load-test.md).
 - Crash recovery and power loss: [power-loss-test.md](power-loss-test.md). Master keys: see [key-management.md](key-management.md).
 - The public log accepts only listed event types with exactly their listed fields, each in a strict shape (`src/logschema.ts`).

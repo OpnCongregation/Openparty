@@ -65,6 +65,15 @@ export async function verifyConsistency(db: Db, entries: Buffer[], opts: { maxPe
   for (const s of stuck) {
     if (s.age > maxPending) problems.push(`approval ${s.id} (${s.action}) is stuck in 'executing': the action may have run without being marked done`);
   }
+  // Every money row must have its public event. Rows older than the first outbox event predate the outbox: reported, not an error.
+  const first = (await db.query<{ t: string | null }>("SELECT MIN(at) AS t FROM log_outbox"))[0].t;
+  const ledger = await db.query<{ id: number; kind: string; at: string; has: boolean }>(
+    `SELECT l.id::int AS id, l.kind, l.at, EXISTS (SELECT 1 FROM log_outbox o WHERE o.type = 'finance.' || l.kind AND (o.data::jsonb ->> 'ledger_id') = l.id::text) AS has FROM finance_ledger l ORDER BY l.id`);
+  for (const l of ledger) {
+    if (l.has) continue;
+    if (first && new Date(l.at) < new Date(first)) notes.push(`ledger row ${l.id} (${l.kind}) predates the outbox and has no matching event`);
+    else problems.push(`ledger row ${l.id} (${l.kind}) has no public finance.${l.kind} event`);
+  }
   if (withoutKey) notes.push(`${withoutKey} log entries have no key (written before the outbox existed); they cannot be matched`);
 
   return { ok: problems.length === 0, problems, notes, stats: { outboxPublished: published, outboxPending: pending, logEntries: entries.length, logEntriesWithoutKey: withoutKey } };

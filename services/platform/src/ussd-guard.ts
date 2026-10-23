@@ -54,15 +54,17 @@ function presentedSecret(req: FastifyRequest): string | undefined {
 export function registerUssd(app: FastifyInstance, ctx: Ctx, o: UssdOptions) {
   const windowMs = o.windowMs ?? 60_000;
   // Counts are shared through the database (all instances, across restarts); a local layer sits in front of it.
-  const make = (scope: string, max: number): Limiter => {
+  const make = (scope: string, max: number, durable = false): Limiter => {
     const local = new MemoryLimiter(max, windowMs);
-    return o.shared === false ? local : new LayeredLimiter(local, new PgLimiter(ctx.db, scope, max, windowMs));
+    return o.shared === false ? local : new LayeredLimiter(local, new PgLimiter(ctx.db, scope, max, windowMs, Date.now, { durable }));
   };
   // Real traffic arrives from the aggregator's few addresses, so a per-address limit cannot be the main throttle for it: that
   // would cap the whole country. Per address we limit (a) FAILED authentication, which is what stops secret guessing, (b) the
   // unauthenticated simulator route, and (c) the gateway at a high ceiling that only a runaway client would reach. The real
   // per-user control is per phone number.
-  const failLimit = make("ussd-authfail", o.perIp ?? 20);
+  // Which counters may reset when the database crashes: only volume throttles (phone, gateway, simulator). Failed authentication is
+  // what stops secret guessing, so it is kept in a crash-durable table; PIN guesses are tracked per account in pin_attempts (members.ts).
+  const failLimit = make("ussd-authfail", o.perIp ?? 20, true);
   const simLimit = make("ussd-sim", o.perIp ?? 120);
   const gatewayLimit = make("ussd-gateway", o.perGateway ?? 6000);
   const phoneLimit = make("ussd-phone", o.perPhone ?? 30);

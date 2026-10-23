@@ -71,11 +71,17 @@ async function settle(ctx: Ctx, a: Pick<Attempt, "key" | "member_id">, p: Incomi
     return await recordDues(ctx, a.member_id, p, (tx, ledgerId) => setAttempt(tx, a.key, "recorded", { ledgerId }));
   } catch (e: any) {
     if (e instanceof DomainError && e.code === "duplicate_payment") {
-      // A previous run recorded it but died before updating the attempt: adopt the existing ledger row.
-      const row = await ctx.db.query<{ id: number }>("SELECT id::int AS id FROM finance_ledger WHERE external_ref=$1", [p.ref]);
+      // The ledger already has this payment (an older run recorded it and died before finishing). Adopt it, but do not trust that
+      // its public event exists: check, and re-emit it in the same transaction if it is missing, so ledger, attempt and log converge.
+      const row = await ctx.db.query<{ id: number }>("SELECT id::int AS id FROM finance_ledger WHERE external_ref=$1 AND kind='dues'", [p.ref]);
       if (row.length) {
-        await setAttempt(ctx.db, a.key, "recorded", { ledgerId: row[0].id });
-        return { ledgerId: row[0].id };
+        const ledgerId = row[0].id;
+        await ctx.commit(async (tx) => {
+          const have = await tx.query("SELECT 1 FROM log_outbox WHERE type='finance.dues' AND (data::jsonb ->> 'ledger_id') = $1 LIMIT 1", [String(ledgerId)]);
+          if (!have.length) await ctx.events.emit(tx, { type: "finance.dues", data: { ledger_id: ledgerId, amount_minor: p.amountMinor, member_ref: logRef(ctx, "member", a.member_id) } });
+          await setAttempt(tx, a.key, "recorded", { ledgerId });
+        });
+        return { ledgerId };
       }
     }
     // A rule refused money that the provider already took: it must be refunded, so keep it visible rather than lost.
@@ -146,7 +152,7 @@ export async function recordGift(ctx: Ctx, p: IncomingPayment, donor: Donor) {
   const ceiling = ctx.config.pack.params["finance.cap_per_donor_minor"] as number;
   const cap = Math.min(await getRule<number>(ctx, "finance.cap_per_donor_minor"), ceiling);
   const windowDays = await getRule<number | null>(ctx, "finance.cap_window_days");
-  const donorKey = ctx.keys.lookupHash("donor", `${donor.name.trim().toLowerCase()}|${donor.address.trim().toLowerCase()}`);
+  const donorKey = ctx.keys.refHash("donor", `${donor.name.trim().toLowerCase()}|${donor.address.trim().toLowerCase()}`);
   // A rolling window when the party sets one (DDPN: a year); otherwise the cap is over the donor's lifetime.
   const since = windowDays ? new Date(ctx.clock().getTime() - windowDays * 86_400_000).toISOString() : null;
   const keyId = `donor:${donorKey}`;
