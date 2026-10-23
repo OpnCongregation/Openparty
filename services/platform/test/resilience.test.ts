@@ -27,7 +27,8 @@ async function flakyCtx() {
   return { ctx, log };
 }
 
-const vote = (ctx: any) => new Date(ctx.clock().getTime() + 40 * DAY);
+let nth = 0; // contests may not share a vote date, and these tests only need many events
+const vote = (ctx: any) => new Date(ctx.clock().getTime() + (40 + nth++) * DAY);
 const mk = (ctx: any, name = "P") => contests.createContest(ctx, { name, primaryType: "direct", mode: "virtual", voteDate: vote(ctx) });
 const pendingRows = async (ctx: any) => (await ctx.db.query("SELECT COUNT(*)::int AS n FROM log_outbox WHERE published_at IS NULL"))[0].n as number;
 

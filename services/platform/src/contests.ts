@@ -56,6 +56,11 @@ async function getContest(ctx: Ctx, id: string): Promise<Contest> {
   return r.length ? r[0] : fail("not_found", "No such contest", 404);
 }
 
+/** INEC receipt references: 6 to 64 characters of letters, digits and . _ / -. Free text such as "x" is refused. The platform cannot check a receipt with INEC; it can only refuse nonsense. */
+const RECEIPT = /^[A-Za-z0-9][A-Za-z0-9._/-]{5,63}$/;
+const badReceipt = (receipt: string) => !RECEIPT.test((receipt ?? "").trim());
+const RECEIPT_MSG = "Receipt reference must be 6 to 64 characters: letters, digits and . _ / -";
+
 export async function createContest(
   ctx: Ctx,
   input: { name: string; primaryType: string; mode: string; voteDate: Date },
@@ -66,6 +71,9 @@ export async function createContest(
   if (input.mode && !modes.includes(input.mode)) return fail("bad_mode", `Mode must be one of: ${modes.join(", ")}`);
   if (!ctx.config.get<string[]>("primary.allowed_types").includes(input.primaryType))
     return fail("bad_primary_type", `Primary type must be one of: ${ctx.config.get<string[]>("primary.allowed_types").join(", ")}`);
+  const clash = await ctx.db.query(
+    "SELECT 1 FROM contests WHERE state<>'closed' AND (vote_date AT TIME ZONE 'UTC')::date = ($1::timestamptz AT TIME ZONE 'UTC')::date", [input.voteDate.toISOString()]);
+  if (clash.length) return fail("contest_overlap", "Another contest that is not closed already has this vote date", 409);
   const id = randomUUID();
   await ctx.commit(async (tx) => {
     await tx.query("INSERT INTO contests(id,name,primary_type,mode,vote_date) VALUES ($1,$2,$3,$4,$5)",
@@ -109,7 +117,9 @@ export async function recordNoticeReceipt(ctx: Ctx, contestId: string, receipt: 
   const c = await getContest(ctx, contestId);
   if (c.state !== "noticed") return fail("bad_state", "Generate the notice first", 409);
   if (c.notice_receipt) return fail("already_set", "Receipt already recorded", 409);
-  if (!receipt.trim()) return fail("receipt_required", "Receipt reference required");
+  if (!(receipt ?? "").trim()) return fail("receipt_required", "Receipt reference required");
+  if (badReceipt(receipt)) return fail("bad_receipt", RECEIPT_MSG);
+  receipt = receipt.trim();
   await ctx.commit(async (tx) => {
     await tx.query("UPDATE contests SET notice_receipt=$2 WHERE id=$1", [contestId, receipt]);
     await ctx.events.emit(tx, { type: "contest.notice_receipt", data: { contest_id: contestId, receipt_hash: sha256hex(receipt) } });
@@ -132,13 +142,16 @@ export async function freezeRegister(ctx: Ctx, contestId: string) {
   const members = await ctx.db.query<{ id: string; card_no: string; record_enc: string }>(
     "SELECT id, card_no, record_enc FROM members WHERE state='active' AND activated_at <= $1 ORDER BY card_no", [ctx.clock().toISOString()]);
   const rows: (RegisterRecord & { card_no: string })[] = [];
+  const problems: string[] = [];
   for (const m of members) {
     const rec = await ctx.keys.decrypt<RegisterRecord>(m.id, m.record_enc);
     const missing = missingRegisterFields(rec, ctx.config.get<string[]>("register.fields"));
-    if (missing.length) return fail("incomplete_record", `Member ${m.card_no} missing: ${missing.join(", ")}`, 422);
+    if (missing.length) { problems.push(`${m.card_no} missing: ${missing.join(", ")}`); continue; }
     const { phone: _phone, ...legal } = rec;
     rows.push({ card_no: m.card_no, ...legal } as any);
   }
+  // A register with a gap cannot be filed, but the operator should see every gap at once, not fix them one filing attempt at a time.
+  if (problems.length) return fail("incomplete_record", `${problems.length} member record(s) incomplete: ${problems.slice(0, 20).join("; ")}${problems.length > 20 ? "; ..." : ""}`, 422);
   const exportJson = canonical({ contest_id: contestId, frozen_at: ctx.clock().toISOString(), members: rows });
   const fingerprint = sha256hex(exportJson);
   const id = randomUUID();
@@ -170,7 +183,9 @@ export function validateRegisterExport(doc: { members: Partial<RegisterRecord>[]
 }
 
 export async function recordRegisterReceipt(ctx: Ctx, registerId: string, receipt: string) {
-  if (!receipt.trim()) return fail("receipt_required", "Receipt reference required");
+  if (!(receipt ?? "").trim()) return fail("receipt_required", "Receipt reference required");
+  if (badReceipt(receipt)) return fail("bad_receipt", RECEIPT_MSG);
+  receipt = receipt.trim();
   await ctx.commit(async (tx) => {
     const r = await tx.query("UPDATE registers SET inec_receipt=$2 WHERE id=$1 AND inec_receipt IS NULL RETURNING id", [registerId, receipt]);
     if (!r.length) return fail("bad_state", "Unknown register or receipt already recorded", 409);
@@ -183,11 +198,14 @@ export async function recordRegisterReceipt(ctx: Ctx, registerId: string, receip
 /** Voting stays locked until every earlier legal step has a stored receipt. */
 export async function openContest(ctx: Ctx, contestId: string) {
   const c = await getContest(ctx, contestId);
+  if (c.state === "open") return fail("already_open", "Contest is already open", 409);
+  if (c.state === "closed") return fail("already_closed", "Contest is closed and cannot be reopened", 409);
   if (c.state !== "noticed") return fail("not_noticed", "Contest has no notice", 409);
   if (!c.notice_receipt) return fail("no_notice_receipt", "INEC notice receipt not recorded", 423);
   if (!c.register_id) return fail("no_register", "Register not frozen", 423);
   const reg = await ctx.db.query<{ inec_receipt: string | null }>("SELECT inec_receipt FROM registers WHERE id=$1", [c.register_id]);
   if (!reg[0]?.inec_receipt) return fail("no_register_receipt", "INEC register receipt not recorded", 423);
+  if (ctx.clock().getTime() < new Date(c.vote_date).getTime()) return fail("too_early", "Voting cannot open before the vote date", 425);
   if (await rulesHash(ctx) !== c.rules_hash) return fail("rules_changed", "Rules differ from those in the notice", 500);
   await ctx.commit(async (tx) => {
     await tx.query("UPDATE contests SET state='open' WHERE id=$1", [contestId]);
@@ -196,11 +214,26 @@ export async function openContest(ctx: Ctx, contestId: string) {
 }
 
 export async function closeContest(ctx: Ctx, contestId: string) {
+  const c = await getContest(ctx, contestId);
+  if (c.state === "closed") return fail("already_closed", "Contest is already closed", 409);
+  if (c.state === "open" && ctx.clock().getTime() < new Date(c.vote_date).getTime()) return fail("too_early", "Voting cannot close before the vote date", 425);
   await ctx.commit(async (tx) => {
     const r = await tx.query("UPDATE contests SET state='closed' WHERE id=$1 AND state='open' RETURNING id", [contestId]);
     if (!r.length) return fail("bad_state", "Contest is not open", 409);
     await ctx.events.emit(tx, { type: "contest.closed", data: { contest_id: contestId } });
   });
+}
+
+/**
+ * May this member vote in this contest? Only if they are on the frozen register AND still an active member. A member who resigns or is
+ * erased after the freeze stays on the filed register (it is a snapshot) but loses the right to vote; the voting module must call this.
+ */
+export async function isEligible(ctx: Ctx, contestId: string, memberId: string): Promise<boolean> {
+  const c = await getContest(ctx, contestId);
+  if (!c.register_id) return false;
+  const r = await ctx.db.query(
+    "SELECT 1 FROM register_members rm JOIN members m ON m.id=rm.member_id WHERE rm.register_id=$1 AND rm.member_id=$2 AND m.state='active'", [c.register_id, memberId]);
+  return r.length > 0;
 }
 
 export { logRef };

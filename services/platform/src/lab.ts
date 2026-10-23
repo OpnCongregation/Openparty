@@ -50,6 +50,8 @@ class Run {
   constructor(readonly ctx: Ctx, readonly log: MemoryTrustLog, readonly sms: SimSms, private clock: { now: Date }) {}
 
   get now() { return new Date(this.clock.now); }
+  /** Move the virtual clock forward to a date (never backwards). */
+  moveTo(d: Date) { if (d.getTime() > this.clock.now.getTime()) this.clock.now = new Date(d); }
   at(days: number) { return new Date(this.clock.now.getTime() + days * DAY); }
   freshNin() { return String(++this.nin); }
 
@@ -137,6 +139,9 @@ async function runCourse(r: Run, cid: string, needNotice: boolean) {
   const reg = await r.ctx.db.query<{ id: string }>("SELECT id FROM registers WHERE contest_id=$1", [cid]);
   const regId = reg.length ? reg[0].id : (await contests.freezeRegister(r.ctx, cid)).registerId;
   await contests.recordRegisterReceipt(r.ctx, regId, "INEC-R-auto");
+  // Voting cannot open or close before the vote date, so the course moves the virtual clock there (never backwards).
+  const vd = new Date((await r.ctx.db.query<{ vote_date: string }>("SELECT vote_date FROM contests WHERE id=$1", [cid]))[0].vote_date);
+  r.moveTo(vd);
   await contests.openContest(r.ctx, cid);
   await contests.closeContest(r.ctx, cid);
 }
@@ -222,6 +227,8 @@ export const SCENARIOS: Scenario[] = [
       });
       await r.blocked("Try to open voting", "s.77(5)", "no_register_receipt", () => contests.openContest(r.ctx, cid));
       await r.ok("Record INEC's register receipt", "s.77(5)", async () => { await contests.recordRegisterReceipt(r.ctx, regId, "INEC-R-1"); return "Receipt stored."; });
+      await r.blocked("Try to open voting 40 days early", "vote date", "too_early", () => contests.openContest(r.ctx, cid));
+      await r.advance(40, "The vote date arrives");
       await r.ok("Open voting", "s.77(6)", async () => { await contests.openContest(r.ctx, cid); return "Contest is open."; });
     },
   },

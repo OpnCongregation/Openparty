@@ -93,6 +93,10 @@ const ACTIONS: Record<string, ActionSpec> = {
     proposers: ["electoral_committee"], approvers: ["secretary", "auditor"], needed: 2,
     run: (ctx, p) => contests.openContest(ctx, p.contestId),
   },
+  "contest.close": {
+    proposers: ["electoral_committee"], approvers: ["secretary", "auditor"], needed: 2,
+    run: (ctx, p) => contests.closeContest(ctx, p.contestId),
+  },
 };
 
 export const approvalActions = Object.keys(ACTIONS);

@@ -167,7 +167,7 @@ describe("Register freeze and contest gate (s.77(4)-(7))", () => {
   });
 
   it("contest cannot open without notice receipt, register, and register receipt", async () => {
-    const { ctx, cid } = await ready();
+    const { ctx, cid, advance } = await ready();
     await contests.generateNotice(ctx, cid);
     await expect(contests.openContest(ctx, cid)).rejects.toMatchObject({ code: "no_notice_receipt" });
     await contests.recordNoticeReceipt(ctx, cid, "INEC-N-1");
@@ -175,6 +175,8 @@ describe("Register freeze and contest gate (s.77(4)-(7))", () => {
     const f = await contests.freezeRegister(ctx, cid);
     await expect(contests.openContest(ctx, cid)).rejects.toMatchObject({ code: "no_register_receipt" });
     await contests.recordRegisterReceipt(ctx, f.registerId, "INEC-R-1");
+    await expect(contests.openContest(ctx, cid)).rejects.toMatchObject({ code: "too_early" });
+    advance(40);
     await expect(contests.openContest(ctx, cid)).resolves.toBeUndefined();
   });
 

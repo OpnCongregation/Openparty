@@ -5,6 +5,11 @@ All notable changes. This project uses [semantic versioning](https://semver.org/
 ## 0.2.0 (unreleased)
 
 ### Security
+- **Election gates (sample-election probe):** voting can open or close only on or after the vote date (`too_early`); closing is now an approved action
+  (`contest.close`, proposed by the electoral committee, approved by secretary and auditor) instead of a bare function; INEC receipt references must be
+  6-64 characters of letters, digits and `. _ / -` (`bad_receipt`); two unclosed contests cannot share a vote date (`contest_overlap`); a failed register
+  freeze lists every incomplete member record, not just the first; `isEligible()` defines who may vote (on the frozen register AND still active);
+  reopening a closed contest says `already_closed`. 6 tests in `election-gates.test.ts`.
 - The public-log guard is now an allowlist: listed event types, exact fields, strict value shapes (`logschema.ts`). Serialized
   personal data inside a string field, unlisted field names and unknown event types are refused. 8 adversarial tests added.
 - `docker-compose.yml` publishes the log, platform and portal ports on `127.0.0.1` only.
