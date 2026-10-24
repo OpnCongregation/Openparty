@@ -6,7 +6,7 @@ dependency-injector==4.49.1
 gmpy2==2.3.2
 packaging==26.3
 psutil==7.2.2
-pydantic==1.10.21
+pydantic==2.14.1
 python-dateutil==2.9.0.post0
 six==1.17.0
 typing_extensions==4.16.0
