@@ -1,6 +1,6 @@
 {
   "_meta": "English. Other languages are added as sibling files (ha.json, yo.json, ...) and must be written or reviewed by native speakers; missing keys fall back to English.",
-  "ussd.menu": "Welcome\n1 Join the party\n2 Pay dues\n3 My membership card\n4 Complete my record",
+  "ussd.menu": "Welcome\n1 Join the party\n2 Pay dues\n3 My membership card\n4 Complete my record\n5 Vote",
   "ussd.askId.default": "Enter your national ID number",
   "ussd.askId.ng_nin": "Enter your 11-digit NIN",
   "ussd.confirm": "Is this you? {0}\n1 Yes\n2 No",
@@ -25,6 +25,14 @@
   "ussd.record.ask": "Enter your {0}:",
   "ussd.record.agent": "Still needed from your ward agent: {0}.",
   "ussd.record.done": "Thank you. Your record is updated.",
+  "sms.candidateListed": "You are a candidate for {0}. Your name is public. Good luck.",
+  "sms.candidateFee": "You have registered to compete for {0}. Pay the form fee of {1}{2} to be listed on the ballot. Dial the party code and choose 5.",
+  "sms.voteCounted": "Your vote was counted. Receipt {0}. You can change it until voting closes.",
+  "ussd.vote.closed": "No contest is open for voting.",
+  "ussd.vote.notEligible": "You are not on the register for this contest, so you cannot vote.",
+  "ussd.vote.noBallot": "There are no candidates to vote for yet.",
+  "ussd.vote.cancelled": "Cancelled. Your vote was not changed.",
+  "ussd.vote.done": "Vote counted. Receipt {0}. Dial again to change it before voting closes.",
   "sms.active": "You are now an active member. Your card is valid.",
   "sms.dues": "Dues of {0}{1} received. Ref {2}."
 }

@@ -25,13 +25,13 @@ async function rejectForeign(ctx: Ctx, p: IncomingPayment) {
 }
 
 async function insertLedger(ctx: Ctx, db: Db, row: {
-  kind: "dues" | "gift"; amountMinor: number; memberId?: string; donorKey?: string; donorEnc?: string; ref: string;
+  kind: "dues" | "gift" | "form"; amountMinor: number; memberId?: string; donorKey?: string; donorEnc?: string; ref: string; contestId?: string;
 }) {
   // ON CONFLICT instead of catching the unique violation: inside a transaction a failed statement would poison it.
   const r = await db.query<{ id: number }>(
-    `INSERT INTO finance_ledger(kind,amount_minor,member_id,donor_key,donor_enc,external_ref,occurred_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (external_ref) DO NOTHING RETURNING id::int AS id`,
-    [row.kind, row.amountMinor, row.memberId ?? null, row.donorKey ?? null, row.donorEnc ?? null, row.ref, ctx.clock().toISOString()]);
+    `INSERT INTO finance_ledger(kind,amount_minor,member_id,donor_key,donor_enc,external_ref,occurred_at,contest_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (external_ref) DO NOTHING RETURNING id::int AS id`,
+    [row.kind, row.amountMinor, row.memberId ?? null, row.donorKey ?? null, row.donorEnc ?? null, row.ref, ctx.clock().toISOString(), row.contestId ?? null]);
   if (!r.length) return fail("duplicate_payment", "Payment already recorded", 409);
   return r[0].id;
 }
@@ -57,7 +57,34 @@ export async function recordDues(ctx: Ctx, memberId: string, p: IncomingPayment,
   return { ledgerId: id };
 }
 
-interface Attempt { key: string; member_id: string; amount_minor: number; state: string; ref: string | null; currency: string | null; country: string | null; ledger_id: number | null; error: string | null }
+/**
+ * A candidate's form fee. The ledger row, the attempt, the candidacy turning 'listed' and both public events commit in ONE transaction,
+ * exactly like dues, so a crash can never leave a paid fee without a listed candidate or the reverse.
+ */
+export async function recordFormFee(ctx: Ctx, memberId: string, candidacyId: string, p: IncomingPayment, inSameTx?: (tx: Db, ledgerId: number) => Promise<unknown>) {
+  await rejectForeign(ctx, p);
+  const id = await ctx.commit(async (tx) => {
+    const c = (await tx.query<{ fee_minor: number; contest_id: string; member_id: string }>(
+      "SELECT fee_minor::float8 AS fee_minor, contest_id, member_id FROM candidacies WHERE id=$1 FOR UPDATE", [candidacyId]))[0];
+    if (!c || c.member_id !== memberId) return fail("not_found", "No such candidacy", 404);
+    if (Number(c.fee_minor) !== p.amountMinor) return fail("fee_mismatch", "The amount does not match the form fee", 422);
+    const id = await insertLedger(ctx, tx, { kind: "form", amountMinor: p.amountMinor, memberId, ref: p.ref, contestId: c.contest_id });
+    await ctx.events.emit(tx, { type: "finance.form", data: { ledger_id: id, amount_minor: p.amountMinor, candidacy_id: candidacyId } });
+    await inSameTx?.(tx, id);
+    return id;
+  });
+  return { ledgerId: id };
+}
+
+/** Turn a paid candidacy into a listed one (idempotent) and publish it. */
+async function markFormPaid(ctx: Ctx, tx: Db, candidacyId: string, ledgerId: number) {
+  const r = await tx.query<{ race_id: string; contest_id: string }>(
+    "UPDATE candidacies SET state='listed', fee_ledger_id=$2, listed_at=$3 WHERE id=$1 AND state='pending_payment' RETURNING race_id, contest_id",
+    [candidacyId, ledgerId, ctx.clock().toISOString()]);
+  if (r.length) await ctx.events.emit(tx, { type: "candidate.listed", data: { contest_id: r[0].contest_id, race_id: r[0].race_id, candidacy_id: candidacyId } });
+}
+
+interface Attempt { kind: string; purpose_id: string | null; key: string; member_id: string; amount_minor: number; state: string; ref: string | null; currency: string | null; country: string | null; ledger_id: number | null; error: string | null }
 
 const setAttempt = (db: Db, key: string, state: string, extra: { ref?: string; currency?: string; country?: string; ledgerId?: number; error?: string | null } = {}) =>
   db.query(
@@ -66,20 +93,28 @@ const setAttempt = (db: Db, key: string, state: string, extra: { ref?: string; c
     [key, state, extra.ref ?? null, extra.currency ?? null, extra.country ?? null, extra.ledgerId ?? null, extra.error ?? null]);
 
 /** Record a confirmed payment and move its attempt to its final state. Safe to repeat: the ledger's external_ref is unique. */
-async function settle(ctx: Ctx, a: Pick<Attempt, "key" | "member_id">, p: IncomingPayment): Promise<{ ledgerId: number }> {
+async function settle(ctx: Ctx, a: Pick<Attempt, "key" | "member_id" | "kind" | "purpose_id">, p: IncomingPayment): Promise<{ ledgerId: number }> {
+  const finish = async (tx: Db, ledgerId: number) => {
+    await setAttempt(tx, a.key, "recorded", { ledgerId });
+    if (a.kind === "form") await markFormPaid(ctx, tx, a.purpose_id as string, ledgerId);
+  };
   try {
-    return await recordDues(ctx, a.member_id, p, (tx, ledgerId) => setAttempt(tx, a.key, "recorded", { ledgerId }));
+    return a.kind === "form" ? await recordFormFee(ctx, a.member_id, a.purpose_id as string, p, finish) : await recordDues(ctx, a.member_id, p, finish);
   } catch (e: any) {
     if (e instanceof DomainError && e.code === "duplicate_payment") {
       // The ledger already has this payment (an older run recorded it and died before finishing). Adopt it, but do not trust that
       // its public event exists: check, and re-emit it in the same transaction if it is missing, so ledger, attempt and log converge.
-      const row = await ctx.db.query<{ id: number }>("SELECT id::int AS id FROM finance_ledger WHERE external_ref=$1 AND kind='dues'", [p.ref]);
+      const row = await ctx.db.query<{ id: number }>("SELECT id::int AS id FROM finance_ledger WHERE external_ref=$1 AND kind=$2", [p.ref, a.kind === "form" ? "form" : "dues"]);
       if (row.length) {
         const ledgerId = row[0].id;
         await ctx.commit(async (tx) => {
-          const have = await tx.query("SELECT 1 FROM log_outbox WHERE type='finance.dues' AND (data::jsonb ->> 'ledger_id') = $1 LIMIT 1", [String(ledgerId)]);
-          if (!have.length) await ctx.events.emit(tx, { type: "finance.dues", data: { ledger_id: ledgerId, amount_minor: p.amountMinor, member_ref: logRef(ctx, "member", a.member_id) } });
+          const type = a.kind === "form" ? "finance.form" : "finance.dues";
+          const have = await tx.query("SELECT 1 FROM log_outbox WHERE type=$2 AND (data::jsonb ->> 'ledger_id') = $1 LIMIT 1", [String(ledgerId), type]);
+          if (!have.length) await ctx.events.emit(tx, {
+            type, data: a.kind === "form" ? { ledger_id: ledgerId, amount_minor: p.amountMinor, candidacy_id: a.purpose_id }
+              : { ledger_id: ledgerId, amount_minor: p.amountMinor, member_ref: logRef(ctx, "member", a.member_id) } });
           await setAttempt(tx, a.key, "recorded", { ledgerId });
+          if (a.kind === "form") await markFormPaid(ctx, tx, a.purpose_id as string, ledgerId);
         });
         return { ledgerId };
       }
@@ -98,8 +133,27 @@ async function settle(ctx: Ctx, a: Pick<Attempt, "key" | "member_id">, p: Incomi
  */
 export async function collectDues(ctx: Ctx, memberId: string, phone: string, amountMinor: number, key: string) {
   await checkDuesAllowed(ctx, memberId, amountMinor);
+  return collect(ctx, { kind: "dues", purposeId: null }, memberId, phone, amountMinor, key);
+}
+
+/**
+ * Collect a candidate's form fee, once. The key is fixed per candidacy, so a repeated request, a timeout or a crash can neither
+ * charge twice nor lose the payment, and the candidacy becomes 'listed' in the same transaction that records the fee.
+ */
+export async function collectFormFee(ctx: Ctx, memberId: string, phone: string, candidacyId: string) {
+  const c = (await ctx.db.query<{ fee_minor: number; state: string; member_id: string; contest_state: string }>(
+    "SELECT k.fee_minor::float8 AS fee_minor, k.state, k.member_id, c.state AS contest_state FROM candidacies k JOIN contests c ON c.id=k.contest_id WHERE k.id=$1", [candidacyId]))[0];
+  if (!c || c.member_id !== memberId) return fail("not_found", "No such candidacy", 404);
+  if (c.state === "listed") return fail("already_paid", "The form fee is already paid", 409);
+  if (c.state !== "pending_payment") return fail("bad_state", "This candidacy was withdrawn", 409);
+  if (c.contest_state === "open" || c.contest_state === "closed") return fail("candidacy_closed", "Candidacy closed when voting opened", 409);
+  if (!(Number(c.fee_minor) > 0)) return fail("no_fee", "There is no fee to pay", 409);
+  return collect(ctx, { kind: "form", purposeId: candidacyId }, memberId, phone, Number(c.fee_minor), `form:${candidacyId}`);
+}
+
+async function collect(ctx: Ctx, what: { kind: "dues" | "form"; purposeId: string | null }, memberId: string, phone: string, amountMinor: number, key: string) {
   await ctx.db.query(
-    "INSERT INTO payment_attempts(key,member_id,amount_minor,state) VALUES ($1,$2,$3,'charging') ON CONFLICT (key) DO NOTHING", [key, memberId, amountMinor]);
+    "INSERT INTO payment_attempts(key,member_id,amount_minor,state,kind,purpose_id) VALUES ($1,$2,$3,'charging',$4,$5) ON CONFLICT (key) DO NOTHING", [key, memberId, amountMinor, what.kind, what.purposeId]);
   const a = (await ctx.db.query<Attempt>("SELECT * FROM payment_attempts WHERE key=$1", [key]))[0];
   if (a.member_id !== memberId || Number(a.amount_minor) !== amountMinor) return fail("key_reuse", "That payment key was used for a different payment", 409);
   // BIGINT columns come back from a real Postgres server as strings (the embedded one returns numbers): convert.

@@ -263,6 +263,7 @@ export async function closeContest(ctx: Ctx, contestId: string) {
     const r = await tx.query("UPDATE contests SET state='closed' WHERE id=$1 AND state='open' RETURNING id", [contestId]);
     if (!r.length) return fail("bad_state", "Contest is not open", 409);
     await ctx.events.emit(tx, { type: "contest.closed", data: { contest_id: contestId } });
+    await (await import("./election.js")).publishResults(ctx, tx, contestId); // turnout and counts, in the same transaction as the close
   });
 }
 

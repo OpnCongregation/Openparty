@@ -9,7 +9,7 @@ export default function Root({ children }: { children: ReactNode }) {
       <body>
         <header>
           <strong>OpenParty</strong>
-          <nav><a href="/">Log verifier</a><a href="/party">Party page</a><a href="/framework">Framework</a><a href="/lab">Rules lab</a><a href="/tests">Test results</a><a href="/ussd">USSD simulator</a></nav>
+          <nav><a href="/">Log verifier</a><a href="/party">Party page</a><a href="/election">Elections</a><a href="/framework">Framework</a><a href="/lab">Rules lab</a><a href="/tests">Test results</a><a href="/ussd">USSD simulator</a></nav>
         </header>
         <main>{children}</main>
       </body>

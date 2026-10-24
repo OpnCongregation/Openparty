@@ -193,6 +193,9 @@ export async function erase(ctx: Ctx, memberId: string) {
     `SELECT 1 FROM register_members rm JOIN registers r ON r.id=rm.register_id JOIN contests c ON c.id=r.contest_id
      WHERE rm.member_id=$1 AND c.state <> 'closed' LIMIT 1`, [memberId]);
   if (live.length) return fail("legal_hold", "Member is on a live contest register; erasure must wait", 409);
+  const running = await ctx.db.query(
+    `SELECT 1 FROM candidacies k JOIN contests c ON c.id=k.contest_id WHERE k.member_id=$1 AND k.state <> 'withdrawn' AND c.state <> 'closed' LIMIT 1`, [memberId]);
+  if (running.length) return fail("legal_hold", "Member is a candidate in a live contest; withdraw the candidacy first", 409);
   await ctx.commit(async (tx) => {
     await ctx.keys.shred(memberId, tx);
     await tx.query(

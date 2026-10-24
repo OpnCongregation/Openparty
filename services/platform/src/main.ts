@@ -6,6 +6,7 @@ import { buildServer } from "./server.js";
 import { HttpTrustLog } from "./adapters.js";
 import { registerLab } from "./lab.js";
 import { sendRecordNotices } from "./record-notices.js";
+import { demoClockFn, type DemoClock } from "./demo.js";
 import { recordDeployment } from "./framework/deploy.js";
 
 const envNum = (k: string) => (process.env[k] ? Number(process.env[k]) : undefined);
@@ -16,7 +17,13 @@ const peppers = pepperRingFromEnv(process.env);
 // start must say so explicitly instead of looking compliant by accident.
 if (process.env.NODE_ENV === "production" && (!keyProvider || keyProvider.software) && process.env.ALLOW_SOFTWARE_KEYS !== "1")
   throw new Error("NODE_ENV=production with a software master key. Use an HSM/KMS-backed KeyProvider, or set ALLOW_SOFTWARE_KEYS=1 to accept the risk knowingly (docs/key-management.md).");
+// DEMO_MODE=1 gives a movable clock and routes that seed demo data into this database (demo.ts). Local trials only.
+const demo: DemoClock | undefined = process.env.DEMO_MODE === "1" ? { offsetMs: 0 } : undefined;
+if (demo && process.env.NODE_ENV === "production" && process.env.ALLOW_DEMO_IN_PRODUCTION !== "1")
+  throw new Error("DEMO_MODE=1 with NODE_ENV=production. Demo mode seeds fake admins and moves the clock; it must never run with real members.");
+if (demo) console.warn("DEMO_MODE is ON: demo admins/members can be created and the clock can be moved. Do not use with real members.");
 const ctx = await createCtx({
+  clock: demo ? demoClockFn(demo) : undefined,
   databaseUrl: process.env.DATABASE_URL,
   keyProvider,
   peppers,
@@ -51,6 +58,7 @@ setInterval(notices, Number(process.env.RECORD_NOTICE_SECONDS ?? 3600) * 1000).u
 for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { ctx.events.stop(); void ctx.events.flush().finally(() => process.exit(0)); });
 
 const app = buildServer(ctx, {
+  demo,
   trustProxy: process.env.TRUST_PROXY === "1",
   ussd: {
     secret: ussdSecret,

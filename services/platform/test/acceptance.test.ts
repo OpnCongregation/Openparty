@@ -366,7 +366,7 @@ describe("USSD journey (Musa)", () => {
     const nin = freshNin();
     expect(await handleUssd(ctx, phone, "")).toMatch(/^CON .*Join/s);
     expect(await handleUssd(ctx, phone, "1")).toMatch(/^CON .*NIN/);
-    expect(await handleUssd(ctx, phone, `1*${nin}`)).toMatch(/^CON Is this you\? MUS/);
+    expect(await handleUssd(ctx, phone, `1*${nin}`)).toMatch(/^CON Is this you\? [A-Z]{3}/);
     expect(await handleUssd(ctx, phone, `1*${nin}*1`)).toMatch(/INEC/);
     expect(await handleUssd(ctx, phone, `1*${nin}*1*2`)).toMatch(/PIN/);
     expect(await handleUssd(ctx, phone, `1*${nin}*1*2*4321`)).toMatch(/Repeat/);

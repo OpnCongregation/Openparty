@@ -4,6 +4,17 @@ All notable changes. This project uses [semantic versioning](https://semver.org/
 
 ## 0.2.0 (unreleased)
 
+### Voting, phase 1: the ballot box (not a secret ballot; see docs/voting.md)
+- Offices (races) set by the secretary or electoral committee; **anyone who registers to compete is a candidate**, public by design (consent, name on the log, erasure blocked);
+  every admin can only give a **vetting stamp** (vetted or flagged), which never removes a candidate; optional **form fee** per office, paid once and listed in one transaction with the ledger row.
+- Ballots by **USSD (menu 5), online and ward agent**: one per member per office, re-voting replaces it, abstain allowed, only members on the frozen, still-active register, only while open.
+  Results hidden until close and published with turnout in the same transaction as the close. `contest.close` is now an approved action.
+- Portal screens under `/election`: candidates and results, stand for office, vote online, polling-unit terminal, admin desk (step-by-step checklist, demo mode). Admin and agent requests are signed in the browser (Ed25519).
+- **Demo mode** (`DEMO_MODE=1`, plus `ALLOW_DEMO_IN_PRODUCTION=1` under the compose stack): seeds fake admins and members, moves the clock. Off by default, refused in production.
+- **Fixed (pre-existing):** the admin access log recorded concrete URLs; an approval id (UUID) with a long run of digits was refused by the public-log guard, failing the approve request with a 500 at random. It now logs the route pattern.
+- CORS preflight for JSON posts and signed admin requests; `/public/time` so browsers sign with the platform's clock.
+- New docs: `docs/voting.md`, `docs/secret-ballot-recommendation.md`.
+
 ### Security
 - **Election gates (sample-election probe):** voting can open or close only on or after the vote date (`too_early`); closing is now an approved action
   (`contest.close`, proposed by the electoral committee, approved by secretary and auditor) instead of a bare function; INEC receipt references must be

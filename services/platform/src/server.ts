@@ -5,6 +5,9 @@ import * as admin from "./admin.js";
 import * as members from "./members.js";
 import * as contests from "./contests.js";
 import { completeRecord } from "./record-notices.js";
+import * as election from "./election.js";
+import { PgLimiter } from "./ratelimit.js";
+import { registerDemo, type DemoClock } from "./demo.js";
 import * as finance from "./finance.js";
 import * as participation from "./participation.js";
 import { registerUssd, type UssdOptions } from "./ussd-guard.js";
@@ -14,6 +17,8 @@ export interface ServerOptions {
   ussd?: UssdOptions;
   /** Believe X-Forwarded-For. Only behind a reverse proxy you control; otherwise callers could forge their address. */
   trustProxy?: boolean;
+  /** DEMO_MODE only: a movable clock plus seeding routes (demo.ts). Never set for real members. */
+  demo?: DemoClock;
 }
 
 export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
@@ -27,6 +32,16 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
   });
 
   app.addHook("onSend", async (_req, reply) => { reply.header("Access-Control-Allow-Origin", "*"); });
+  // Browser pages (the portal) call this API directly: answer the preflight for JSON posts and signed admin requests.
+  app.addHook("onRequest", async (req, reply) => {
+    if (req.method !== "OPTIONS") return;
+    return reply.code(204)
+      .header("Access-Control-Allow-Origin", "*")
+      .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+      .header("Access-Control-Allow-Headers", "content-type, x-admin-id, x-timestamp, x-signature")
+      .header("Access-Control-Max-Age", "600")
+      .send();
+  });
   app.setErrorHandler((e: any, _req, reply) => {
     if (e instanceof DomainError) return reply.status(e.status).send({ error: e.code, message: e.message, ...(e.details !== undefined ? { details: e.details } : {}) });
     app.log.error(e);
@@ -38,9 +53,15 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
     const h = req.headers;
     const a = await admin.authenticate(ctx, { adminId: h["x-admin-id"], ts: h["x-timestamp"], sig: h["x-signature"] }, req.method, req.url, req.rawBody ?? "");
     if (perm) admin.require_(a, perm);
-    await admin.logAccess(ctx, a.id, `${req.method} ${req.url.split("?")[0]}`);
+    // Log the route PATTERN (/admin/approvals/:id/approve), not the URL: ids in a URL are UUIDs, and a UUID with a long run of digits
+    // is refused by the public-log guard (it looks like a phone number), which used to fail the request itself at random.
+    await admin.logAccess(ctx, a.id, `${req.method} ${req.routeOptions?.url ?? req.url.split("?")[0]}`);
     return reply.send(await fn(a, req));
   };
+
+  // Server time, so a browser that signs admin requests can use the platform's clock (which a demo can move) instead of its own.
+  app.get("/public/time", async () => ({ now: ctx.clock().toISOString() }));
+  if (opts.demo) registerDemo(app, ctx, opts.demo);
 
   // "degraded" = committed events are waiting too long to reach the public log (the log is down or refusing them).
   app.get("/healthz", async () => {
@@ -52,6 +73,28 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
 
   // USSD gateway webhook (Africa's Talking format): authenticated, validated and rate limited. See ussd-guard.ts.
   registerUssd(app, ctx, opts.ussd ?? {});
+
+  // ---- Elections: public views, member self-service (phone + PIN, throttled per address and per member), admin and agent routes ----
+  const voteLimit = new PgLimiter(ctx.db, "vote-web", 60, 60_000);
+  const PHONE = /^\+?\d{8,15}$/;
+  const member = (fn: (b: any) => Promise<unknown>) => async (req: any, reply: any) => {
+    if (!(await voteLimit.take(req.ip))) return reply.code(429).header("Retry-After", 60).send({ error: "rate_limited" });
+    const b = req.body ?? {};
+    if (typeof b.phone !== "string" || !PHONE.test(b.phone) || typeof b.pin !== "string" || !/^\d{4}$/.test(b.pin)) return reply.code(400).send({ error: "bad_request", message: "Phone number and 4-digit PIN required" });
+    return reply.send(await fn(b));
+  };
+  app.get("/public/election/:contestId", async (req) => election.listElection(ctx, (req.params as any).contestId));
+  app.get("/public/election/:contestId/results", async (req) => election.results(ctx, (req.params as any).contestId));
+  app.post("/election/ballot", member((b) => election.webBallot(ctx, b)));
+  app.post("/election/vote", member((b) => election.webVote(ctx, b)));
+  app.post("/election/apply", member((b) => election.registerCandidate(ctx, b)));
+  app.post("/election/pay-form", member((b) => election.payForm(ctx, b)));
+  app.post("/election/withdraw", member((b) => election.withdrawCandidate(ctx, b).then(() => ({ ok: true }))));
+  app.post("/election/mine", member((b) => election.myCandidacies(ctx, b)));
+  app.post("/agent/vote", guarded("member.activate", (a, req) => election.agentVote(ctx, a, req.body ?? {})));
+  app.post("/admin/races", guarded("race.manage", (a, req) => election.createRace(ctx, a, req.body ?? {})));
+  app.post("/admin/candidates/:id/stamp", guarded("candidate.stamp", (a, req) => election.stampCandidate(ctx, a, req.params.id, req.body?.verdict, req.body?.note).then(() => ({ ok: true }))));
+  app.get("/admin/election/:contestId", guarded("candidate.stamp", (_a, req) => election.listElection(ctx, req.params.contestId, { admin: true })));
 
   // Ward agent
   app.post("/agent/activate", guarded("member.activate", (a, req) => members.activateMember(ctx, a, req.body).then(() => ({ ok: true }))));

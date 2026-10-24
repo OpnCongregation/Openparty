@@ -38,7 +38,9 @@ export class SimNgNinAdapter implements IdAdapter {
   async verify(nin: string): Promise<IdResult | null> {
     if (!/^[1-9]\d{10}$/.test(nin)) return null;
     const n = Number(nin.slice(-2));
-    const name = `Musa Ibrahim ${nin.slice(-4)}`;
+    const first = ["Musa", "Amina", "Chidi", "Ngozi", "Tunde", "Zainab", "Emeka", "Hauwa", "Bola", "Sani"][Number(nin.slice(-1))];
+    const last = ["Ibrahim", "Okafor", "Adeyemi", "Bello", "Eze", "Lawal", "Nwosu", "Abubakar", "Balogun", "Danjuma"][Number(nin.slice(-2, -1))];
+    const name = `${first} ${last}`;
     return {
       verified: true, ageOk: true, area: "Gwale", assurance: this.assurance,
       preview: name.slice(0, 3).toUpperCase() + "…",

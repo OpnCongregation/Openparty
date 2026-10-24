@@ -12,12 +12,13 @@ export const ROLES = ["secretary", "electoral_committee", "treasurer", "auditor"
 export type Role = (typeof ROLES)[number];
 
 const PERMISSIONS: Record<Role, string[]> = {
-  secretary: ["contest.create", "notice.generate", "receipt.record", "approval.propose", "approval.approve"],
-  electoral_committee: ["contest.create", "receipt.record", "approval.propose", "approval.approve"],
-  treasurer: ["gift.record", "finance.retry"],
-  auditor: ["finance.report", "register.read", "access.read", "approval.approve"],
-  tribunal: [],
-  ward_agent: ["member.activate"],
+  // "candidate.stamp": every admin may give a vetting stamp on a candidate. A stamp is information for voters; nobody can remove a candidate.
+  secretary: ["contest.create", "notice.generate", "receipt.record", "approval.propose", "approval.approve", "race.manage", "candidate.stamp"],
+  electoral_committee: ["contest.create", "receipt.record", "approval.propose", "approval.approve", "race.manage", "candidate.stamp"],
+  treasurer: ["gift.record", "finance.retry", "candidate.stamp"],
+  auditor: ["finance.report", "register.read", "access.read", "approval.approve", "candidate.stamp"],
+  tribunal: ["candidate.stamp"],
+  ward_agent: ["member.activate", "candidate.stamp"],
 };
 
 export interface Admin { id: string; name: string; role: Role; ward: string | null }

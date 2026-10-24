@@ -1,0 +1,53 @@
+/* The election screens: a plain, high-contrast ballot-paper look that works on a phone and in a polling unit. */
+.el { max-width: 920px; margin: 0 auto; }
+.el-sub { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 0 20px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.el-sub a { padding: 8px 14px; border-radius: 7px; text-decoration: none; color: var(--fg); font-size: .95rem; }
+.el-sub a:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.el-sub a.on { background: var(--accent); color: #fff; }
+.el h1 { font-size: 1.55rem; letter-spacing: -0.01em; }
+.el .banner { border-left: 4px solid #b7791f; background: color-mix(in srgb, #b7791f 12%, var(--card)); padding: 10px 14px; border-radius: 6px; margin: 0 0 18px; font-size: .92rem; }
+.el .banner.demo { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
+.el label { display: block; font-size: .85rem; color: var(--muted); margin: 10px 0 4px; }
+.el select, .el textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); font: inherit; }
+.el .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 640px) { .el .grid2 { grid-template-columns: 1fr; } }
+.el .race { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin: 14px 0; }
+.el .race h3 { margin: 0 0 2px; font-size: 1.1rem; }
+.el .race .meta { color: var(--muted); font-size: .85rem; margin-bottom: 10px; }
+.el .cand { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; margin: 8px 0; cursor: default; background: var(--bg); }
+.el .cand.pick { cursor: pointer; }
+.el .cand.pick:hover { border-color: var(--accent); }
+.el .cand.chosen { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg)); box-shadow: inset 0 0 0 1px var(--accent); }
+.el .cand .name { font-weight: 600; flex: 1; }
+.el .cand input[type=radio] { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.el .pill { font-size: .75rem; padding: 2px 9px; border-radius: 99px; border: 1px solid var(--line); white-space: nowrap; }
+.el .pill.vetted { color: var(--accent); border-color: var(--accent); }
+.el .pill.flagged { color: var(--bad); border-color: var(--bad); }
+.el .pill.mixed { color: #b7791f; border-color: #b7791f; }
+.el .pill.unvetted { color: var(--muted); }
+.el .pill.open { color: var(--accent); border-color: var(--accent); }
+.el .bar { height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; flex: 1; min-width: 80px; }
+.el .bar > span { display: block; height: 100%; background: var(--accent); }
+.el .bar.win > span { background: #1f6feb; }
+.el .big button, .el button.big { padding: 14px 22px; font-size: 1.05rem; border-radius: 9px; }
+.el button:disabled { opacity: .5; cursor: not-allowed; }
+.el button.danger { background: var(--bad); }
+.el .msg { margin: 12px 0; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); }
+.el .msg.err { border-color: var(--bad); color: var(--bad); }
+.el .msg.ok { border-color: var(--accent); }
+.el .receipt { font: 700 1.3rem ui-monospace, monospace; letter-spacing: .08em; }
+.el .steps { counter-reset: s; list-style: none; padding: 0; margin: 0; }
+.el .steps > li { counter-increment: s; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px 12px 52px; margin: 10px 0; position: relative; background: var(--card); }
+.el .steps > li::before { content: counter(s); position: absolute; left: 14px; top: 12px; width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-weight: 700; font-size: .85rem; }
+.el .steps > li.done::before { content: "✓"; border-color: var(--accent); background: var(--accent); color: #fff; }
+.el .steps > li.now { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.el .steps h4 { margin: 0 0 4px; font-size: 1rem; }
+.el .who { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.el .who button { background: transparent; color: var(--fg); border: 1px solid var(--line); font-size: .85rem; padding: 5px 10px; }
+.el .who button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.el pre.log { max-height: 220px; overflow: auto; background: #0e100e; color: #b6f5c9; padding: 10px 12px; border-radius: 8px; font-size: 12px; }
+.el .unit { border: 3px solid var(--fg); border-radius: 14px; padding: 18px; background: var(--card); }
+.el .unit h2 { margin-top: 0; }
+.el .pin { letter-spacing: .4em; font-size: 1.4rem; text-align: center; max-width: 180px; }
+.el .row.tight { gap: 6px; }
+.el table.t td, .el table.t th { font-size: .9rem; }

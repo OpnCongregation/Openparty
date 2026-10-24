@@ -20,6 +20,15 @@ const KINDS = {
   version: /^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$/,
   /** Ward or district name set by an agent: short, plain characters only. */
   label: /^[A-Za-z0-9][A-Za-z0-9 ._'-]{0,39}$/,
+  /** An office title such as "Deputy National Chairman (North)". Brackets, commas and & allowed; letters and digits only otherwise. */
+  title: /^[A-Za-z0-9][A-Za-z0-9 ._'(),&/-]{0,79}$/,
+  /**
+   * A candidate's public name. This is the ONE place a person's name may be published, and only because candidacy is public by
+   * design and the member consented. The field is called "candidate" on purpose: the key denylist in adapters.ts still refuses "name".
+   * Shape: letters (any script), spaces and . ' - only, so an ID number or phone number cannot ride along.
+   */
+  /** A candidate's public name: letters (any script), spaces and . ' - only. No digits, so an ID or phone number cannot ride along. */
+  person: /^\p{L}[\p{L}\p{M} .'-]{1,79}$/u,
   /** `METHOD /path` of an admin call (query string already removed). */
   route: /^[A-Z]{3,7} \/[A-Za-z0-9/_.:-]{0,119}$/,
 } as const;
@@ -27,7 +36,7 @@ const KINDS = {
 type Kind = keyof typeof KINDS | "int";
 
 /** Kinds that carry readable text, where an identifier or phone number could be typed in. */
-const TEXTUAL = new Set<Kind>(["token", "code", "version", "label", "route"]);
+const TEXTUAL = new Set<Kind>(["token", "code", "version", "label", "route", "title", "person"]);
 /** Seven digits in a row is more than any ward number or version needs, and less than any NIN or phone number. */
 const LONG_DIGITS = /\d{7,}|(\d[\s-]?){9,}/;
 
@@ -35,6 +44,15 @@ const EVENTS: Record<string, Record<string, Kind>> = {
   "finance.quarantined": { reason: "token", amount_minor: "int" },
   "finance.dues": { ledger_id: "int", amount_minor: "int", member_ref: "ref" },
   "finance.gift": { ledger_id: "int", amount_minor: "int" },
+  "finance.form": { ledger_id: "int", amount_minor: "int", candidacy_id: "uuid" },
+  "race.created": { contest_id: "uuid", race_id: "uuid", office: "title", scope: "title", form_fee_minor: "int" },
+  "candidate.registered": { contest_id: "uuid", race_id: "uuid", candidacy_id: "uuid", member_ref: "ref", candidate: "person", fee_minor: "int" },
+  "candidate.listed": { contest_id: "uuid", race_id: "uuid", candidacy_id: "uuid" },
+  "candidate.withdrawn": { contest_id: "uuid", race_id: "uuid", candidacy_id: "uuid" },
+  "candidate.stamped": { candidacy_id: "uuid", admin_id: "uuid", verdict: "token" },
+  "ballot.cast": { contest_id: "uuid", race_id: "uuid", ballot_ref: "uuid", channel: "token", revision: "int" },
+  "race.turnout": { contest_id: "uuid", race_id: "uuid", ballots: "int", abstained: "int", eligible: "int" },
+  "race.result": { contest_id: "uuid", race_id: "uuid", candidacy_id: "uuid", votes: "int" },
   "rule.set": { key: "token", version: "int", value_hash: "hash", set_by: "uuid" },
   "contest.created": { contest_id: "uuid", mode: "token", vote_date: "iso" },
   "contest.type_changed": { contest_id: "uuid", primary_type: "token" },

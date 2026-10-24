@@ -57,6 +57,10 @@ services:
       APPROVAL_LEASE_SECONDS: ${APPROVAL_LEASE_SECONDS:-60}
       APPROVAL_RECOVERY_SECONDS: ${APPROVAL_RECOVERY_SECONDS:-30}
       RECORD_NOTICE_SECONDS: ${RECORD_NOTICE_SECONDS:-3600}
+      # Local trials of the election screens only: seeds demo admins/members into THIS database and lets the clock move. Never with real members.
+      DEMO_MODE: ${DEMO_MODE:-0}
+      # Demo mode is refused when NODE_ENV=production unless this is 1. Set it only for a trial on your own machine.
+      ALLOW_DEMO_IN_PRODUCTION: ${ALLOW_DEMO_IN_PRODUCTION:-0}
       # scrypt (PIN hashing) runs on libuv's thread pool; its default size is 4.
       UV_THREADPOOL_SIZE: ${UV_THREADPOOL_SIZE:-8}
       # The USSD webhook only runs for a caller that sends this secret (the gateway). Give the same value to the gateway.

@@ -119,9 +119,56 @@ CREATE TABLE IF NOT EXISTS record_notices (
 CREATE INDEX IF NOT EXISTS record_notices_member ON record_notices(member_id, kind);
 CREATE UNIQUE INDEX IF NOT EXISTS record_notices_excluded_once ON record_notices(member_id, missing) WHERE kind='excluded';
 
+-- ---- Elections (phase 1: ballot box). Candidates are public by design; ballots are NOT yet secret (see docs/voting.md). ----
+CREATE TABLE IF NOT EXISTS races (
+  id TEXT PRIMARY KEY,
+  contest_id TEXT NOT NULL,
+  office TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT '',
+  form_fee_minor BIGINT NOT NULL DEFAULT 0 CHECK (form_fee_minor >= 0),
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (contest_id, office, scope)
+);
+-- Anyone who registers to compete is a candidate; admins can only stamp. 'pending_payment' until the form fee (if any) is paid.
+CREATE TABLE IF NOT EXISTS candidacies (
+  id TEXT PRIMARY KEY,
+  race_id TEXT NOT NULL,
+  contest_id TEXT NOT NULL,
+  member_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  fee_minor BIGINT NOT NULL DEFAULT 0,
+  fee_ledger_id BIGINT,
+  state TEXT NOT NULL CHECK (state IN ('pending_payment','listed','withdrawn')),
+  registered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  listed_at TIMESTAMPTZ,
+  UNIQUE (race_id, member_id)
+);
+CREATE TABLE IF NOT EXISTS candidate_stamps (
+  candidacy_id TEXT NOT NULL,
+  admin_id TEXT NOT NULL,
+  verdict TEXT NOT NULL CHECK (verdict IN ('vetted','flagged')),
+  note TEXT,
+  at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (candidacy_id, admin_id)
+);
+-- One current ballot per member per race (re-voting replaces it). candidacy_id NULL = abstain. Phase 1 stores the voter beside the choice.
+CREATE TABLE IF NOT EXISTS ballots (
+  contest_id TEXT NOT NULL,
+  race_id TEXT NOT NULL,
+  member_id TEXT NOT NULL,
+  candidacy_id TEXT,
+  revision INT NOT NULL DEFAULT 1,
+  channel TEXT NOT NULL CHECK (channel IN ('ussd','agent','web')),
+  agent_id TEXT,
+  receipt TEXT NOT NULL,
+  cast_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (contest_id, race_id, member_id)
+);
+
 CREATE TABLE IF NOT EXISTS finance_ledger (
   id BIGSERIAL PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN ('dues','gift')),
+  kind TEXT NOT NULL CHECK (kind IN ('dues','gift','form')),
   amount_minor BIGINT NOT NULL CHECK (amount_minor > 0),
   member_id TEXT,
   donor_key TEXT,                -- HMAC of donor identity, for cap tracking
@@ -132,6 +179,13 @@ CREATE TABLE IF NOT EXISTS finance_ledger (
   occurred_at TIMESTAMPTZ         -- the deployment clock when recorded (virtual in tests); used for rolling-window caps
 );
 ALTER TABLE finance_ledger ADD COLUMN IF NOT EXISTS occurred_at TIMESTAMPTZ;
+-- Candidate form fees are a third kind of ledger row. Older databases have the two-value check: replace it once.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='finance_ledger_kind_check' AND pg_get_constraintdef(oid) NOT LIKE '%form%') THEN
+    ALTER TABLE finance_ledger DROP CONSTRAINT finance_ledger_kind_check;
+    ALTER TABLE finance_ledger ADD CONSTRAINT finance_ledger_kind_check CHECK (kind IN ('dues','gift','form'));
+  END IF;
+END $$;
 -- One row per attempt to collect money, written BEFORE the provider is called. 'charging' = outcome unknown,
 -- 'charged' = provider confirmed but the ledger has no row yet, 'refund_due' = money taken and refused by a rule.
 CREATE TABLE IF NOT EXISTS payment_attempts (
@@ -145,6 +199,8 @@ CREATE TABLE IF NOT EXISTS payment_attempts (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE payment_attempts ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'dues';
+ALTER TABLE payment_attempts ADD COLUMN IF NOT EXISTS purpose_id TEXT;   -- what the money is for (a candidacy id for form fees)
 -- Transactional outbox for the public log. An event is written in the SAME transaction as the change it describes, then
 -- published to the log in order. 'oid' is the idempotency key the log uses to ignore a repeated publish.
 CREATE TABLE IF NOT EXISTS log_outbox (
