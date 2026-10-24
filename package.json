@@ -13,5 +13,11 @@
     "test:tools": "node --test scripts/test-report.test.mjs scripts/prepublish-check.test.mjs",
     "validate:packs": "npm run validate:packs --workspace @openparty/platform",
     "prepublish:check": "node scripts/prepublish-check.mjs"
+  },
+  "overrides": {
+    "ws": "8.22.0",
+    "ethers": "6.17.0",
+    "circom_tester": "0.0.24",
+    "postcss": "8.5.31"
   }
 }

@@ -4,6 +4,14 @@ All notable changes. This project uses [semantic versioning](https://semver.org/
 
 ## 0.2.0 (unreleased)
 
+### Dependency security (GitHub reported 114 alerts)
+- `npm audit`: **24 vulnerable packages to 0.** Same-major bumps: fastify 5.2.1 to 5.12.7 (content-type validation bypass, spoofable host and protocol headers, memory DoS), yaml 2.6.1 to 2.9.1,
+  tsx 4.19.2 to 4.23.15, vitest 2.1.8 to 4.1.12 (dev only; remote-code-execution when its UI server runs), next 14.2.21 to 15.5.28 (the portal; works with React 18).
+- Root `overrides` for packages pulled in by Semaphore, which has no newer release: `ws` 8.22.0, `ethers` 6.17.0, `circom_tester` 0.0.24 (removes an old snarkjs with the "double spend" advisory), `postcss` 8.5.31.
+  Revisit these when `@semaphore-protocol/*` releases newer than 4.14.5.
+- Python service: requirements pinned to exact versions; pydantic 1.9.0 to 1.10.21 (a regular-expression DoS in email validation, which we never use); `pip-audit` clean. The Go service has no third-party packages.
+- Added `.github/dependabot.yml` (weekly, one pull request per advisory).
+
 ### Anonymous membership proof (Semaphore)
 - Each member has one identity; the commitments of everyone on the frozen register form a fixed, sorted, public group, built when the election is sealed (the register must be frozen first).
   A ballot carries a zero-knowledge proof of membership with a nullifier (same person, same contest: same nullifier, so a re-vote replaces the earlier ballot; unlinkable across contests), bound to the ballot id and the contest, stored and published.

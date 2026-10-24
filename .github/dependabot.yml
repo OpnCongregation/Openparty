@@ -1,0 +1,28 @@
+# Dependabot opens a pull request when a dependency has a known vulnerability or a new release, so fixes arrive one at a time and each is
+# tested by the full suite before it is merged. Security fixes are not grouped: one advisory, one pull request.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 10
+    groups:
+      # Routine version bumps are grouped to keep the noise down; security updates always stand alone.
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+        applies-to: version-updates
+  - package-ecosystem: gomod
+    directory: "/services/trustlog"
+    schedule: { interval: weekly }
+  - package-ecosystem: pip
+    directory: "/services/electionguard"
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: "/services/electionguard"
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: "/services/platform"
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly }

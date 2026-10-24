@@ -68,6 +68,7 @@ a real ElectionGuard key ceremony, encrypted ballots, a tally opened by any thre
 | E4 | PRD section 22 and the traceability matrix still describe the earlier build; update | Documentation |
 | E5 | Push the local commits and **revoke the exposed GitHub token** | Housekeeping |
 | E6 | Clean the local demo data (fake members, contests, public-log entries) and turn the demo flags off before any real use | Your local stack holds demo data |
+| E8 | **Dependency hygiene.** Merge Dependabot's pull requests as they come (each runs the full suite first); re-check the `overrides` in the root `package.json` whenever Semaphore releases; run `npm audit` and `pip-audit` before every release. ElectionGuard 1.4.0 itself is old and pins old packages, which is why the Docker build prints a pip resolver warning (harmless: it is installed without its declared dependencies on purpose) | Vulnerabilities in packages we ship |
 | E7 | Admin screens: contest creation, guardian reminders, tally progress notifications | Today some actions are API-only |
 
 ## Owner decisions recorded
