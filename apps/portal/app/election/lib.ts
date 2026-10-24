@@ -6,7 +6,11 @@ export const PLATFORM = process.env.NEXT_PUBLIC_PLATFORM_URL ?? "http://localhos
 /** An admin who can sign requests: their id, role and Ed25519 private key (PKCS8, base64). Demo keys come from /demo/seed. */
 export interface Identity { id: string; name: string; role: string; ward: string | null; privateKey: string }
 export interface DemoMember { phone: string; pin: string; cardNo: string; preview: string }
-export interface DemoKit { admins: Identity[]; members: DemoMember[]; contestId: string; voteDate: string }
+export interface DemoKit {
+  admins: Identity[]; members: DemoMember[]; contestId: string; voteDate: string;
+  /** DEMO ONLY: the guardians' private key files, kept here so the demo can open the tally. A real guardian keeps theirs offline. */
+  guardianStates?: Record<string, string>;
+}
 
 const b64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const hex = (buf: ArrayBuffer) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -58,6 +62,14 @@ export function useDemoKit() {
   return [kit, save, ready] as const;
 }
 
+/** What this deployment can do (is the secret ballot configured? can the demo run the guardians?). */
+export interface PlatformConfig { secretBallot: boolean; plainBallotAllowed: boolean; demoGuardians: boolean }
+export function useConfig() {
+  const [cfg, setCfg] = useState<PlatformConfig | null>(null);
+  useEffect(() => { void call<PlatformConfig>("GET", "/public/config").then((r) => setCfg(r.ok ? r.data : { secretBallot: false, plainBallotAllowed: true, demoGuardians: false })); }, []);
+  return cfg;
+}
+
 export interface ContestRow { id: string; name: string; state: string; vote_date: string; mode: string }
 export function useContests() {
   const [rows, setRows] = useState<ContestRow[] | null>(null);
@@ -78,5 +90,13 @@ export function defaultContest(rows: ContestRow[]): string {
 
 export const money = (minor: number) => (minor === 0 ? "free" : `₦${(minor / 100).toLocaleString("en-NG")}`);
 export const when = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+
+/** Several admins can share a role (five electoral-committee members): number them. */
+export function adminLabel(a: Identity, all: Identity[]): string {
+  const same = all.filter((x) => x.role === a.role);
+  const base = ROLE_LABEL[a.role] ?? a.role;
+  return same.length > 1 ? `${base} ${same.findIndex((x) => x.id === a.id) + 1}` : base;
+}
+export const ROLE_LABEL: Record<string, string> = { secretary: "Secretary", electoral_committee: "Electoral committee", auditor: "Auditor", treasurer: "Treasurer", tribunal: "Tribunal", ward_agent: "Ward agent" };
 
 export const stateLabel: Record<string, string> = { draft: "Being set up", noticed: "Notice issued", open: "Voting open", closed: "Closed" };

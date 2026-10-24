@@ -7,6 +7,7 @@ import { require_, type Admin } from "./admin.js";
 import { collectFormFee } from "./finance.js";
 import { verifyPin } from "./members.js";
 import { t } from "./i18n.js";
+import { castEncrypted, encryptedResults, isSealed } from "./secret-ballot.js";
 
 /**
  * Phase 1 of voting: the ballot box. Races, candidates (public by design), vetting stamps, form fees, ballots and the tally.
@@ -26,6 +27,8 @@ async function contestRow(db: Db, id: string): Promise<ContestRow> {
   return r.length ? r[0] : fail("not_found", "No such contest", 404);
 }
 const beforeVoting = (c: ContestRow) => c.state === "draft" || c.state === "noticed";
+/** Offices and candidates can change only before voting AND before the ballot is sealed (once the guardians' keys are in, the ballot is public and final). */
+const candidacyOpen = async (db: Db, c: ContestRow) => beforeVoting(c) && !(await isSealed(db, c.id));
 
 // ---- Races ------------------------------------------------------------------------------------
 
@@ -33,16 +36,14 @@ const beforeVoting = (c: ContestRow) => c.state === "draft" || c.state === "noti
 export async function createRace(ctx: Ctx, admin: Admin, input: { contestId: string; office: string; scope?: string; formFeeMinor?: number }) {
   require_(admin, "race.manage");
   const c = await contestRow(ctx.db, input.contestId);
-  if (!beforeVoting(c)) return fail("candidacy_closed", "Races cannot change once voting has opened", 409);
+  if (!(await candidacyOpen(ctx.db, c))) return fail("candidacy_closed", "Races cannot change once the election is sealed or voting has opened", 409);
   const office = String(input.office ?? "").trim();
   const scope = String(input.scope ?? "").trim() || "All";
   if (!TITLE.test(office)) return fail("bad_office", "Office: 1 to 80 characters, letters, digits and ( ) , & . ' - /");
   if (!TITLE.test(scope)) return fail("bad_scope", "Scope: 1 to 80 characters, letters, digits and ( ) , & . ' - /");
   const fee = input.formFeeMinor ?? 0;
   if (!Number.isSafeInteger(fee) || fee < 0) return fail("bad_fee", "The form fee must be a whole number of minor units, zero or more");
-  // The law pack may set a ceiling on what a party can charge for a candidate form. None is set in the bundled Nigeria pack (owner decision).
-  const cap = (ctx.config.params as Record<string, unknown>)["candidacy.max_form_fee_minor"];
-  if (typeof cap === "number" && fee > cap) return fail("fee_over_cap", `The form fee cannot exceed ${cap} ${ctx.config.pack.currency.minor_unit}`, 422);
+  // No cap on form fees: the owner decided that parties may charge what they choose. (Candidates see the fee before they pay it, and it is public.)
   const id = randomUUID();
   try {
     await ctx.commit(async (tx) => {
@@ -71,7 +72,7 @@ export async function registerCandidate(ctx: Ctx, input: { phone: string; pin: s
     "SELECT id, contest_id, form_fee_minor::float8 AS form_fee_minor, office FROM races WHERE id=$1", [input.raceId]))[0];
   if (!race) return fail("not_found", "No such race", 404);
   const c = await contestRow(ctx.db, race.contest_id);
-  if (!beforeVoting(c)) return fail("candidacy_closed", "Candidacy closed when voting opened", 409);
+  if (!(await candidacyOpen(ctx.db, c))) return fail("candidacy_closed", "Candidacy closed when the election was sealed or voting opened", 409);
   const row = (await ctx.db.query<{ state: string; record_enc: string }>("SELECT state, record_enc FROM members WHERE id=$1", [m.id]))[0];
   if (row.state !== "active") return fail("not_active", "Only active members can stand. See your ward agent to be activated.", 403);
   const rec = await ctx.keys.decrypt<Record<string, string>>(m.id, row.record_enc);
@@ -113,6 +114,7 @@ export async function withdrawCandidate(ctx: Ctx, input: { phone: string; pin: s
     if (!k || k.member_id !== m.id) return fail("not_found", "No such candidacy", 404);
     if (k.state === "withdrawn") return fail("bad_state", "Already withdrawn", 409);
     if (k.cstate !== "draft" && k.cstate !== "noticed") return fail("candidacy_closed", "Candidates cannot withdraw once voting has opened", 409);
+    if (await isSealed(tx, k.contest_id)) return fail("candidacy_closed", "Candidates cannot withdraw once the election is sealed", 409);
     await tx.query("UPDATE candidacies SET state='withdrawn' WHERE id=$1", [input.candidacyId]);
     await ctx.events.emit(tx, { type: "candidate.withdrawn", data: { contest_id: k.contest_id, race_id: k.race_id, candidacy_id: input.candidacyId } });
   });
@@ -173,7 +175,8 @@ export async function listElection(ctx: Ctx, contestId: string, opts: { admin?: 
     }
     out.push({ id: r.id, office: r.office, scope: r.scope, formFeeMinor: Number(r.form_fee_minor), candidates });
   }
-  return { contestId: c.id, name: c.name, state: c.state, voteDate: c.vote_date, races: out };
+  const keys = await ctx.db.query<{ sealed_at: string | null }>("SELECT sealed_at FROM election_keys WHERE contest_id=$1", [contestId]);
+  return { contestId: c.id, name: c.name, state: c.state, voteDate: c.vote_date, secretBallot: !!keys.length, sealed: !!keys[0]?.sealed_at, races: out };
 }
 
 // ---- Voting -----------------------------------------------------------------------------------
@@ -184,14 +187,17 @@ export async function ballotView(ctx: Ctx, memberId: string, contestId: string) 
   const { isEligible } = await import("./contests.js");
   const eligible = await isEligible(ctx, contestId, memberId);
   const view = await listElection(ctx, contestId);
-  const mine = await ctx.db.query<{ race_id: string; candidacy_id: string | null; revision: number; receipt: string }>(
+  const secret = await isSealed(ctx.db, contestId);
+  // In a secret ballot the platform does not know, and cannot show, what a member chose before: only THAT they voted.
+  const mine = secret ? [] : await ctx.db.query<{ race_id: string; candidacy_id: string | null; revision: number; receipt: string }>(
     "SELECT race_id, candidacy_id, revision, receipt FROM ballots WHERE contest_id=$1 AND member_id=$2", [contestId, memberId]);
+  const voted = secret ? (await ctx.db.query<{ revisions: number }>("SELECT revisions FROM voted WHERE contest_id=$1 AND member_id=$2", [contestId, memberId]))[0] : undefined;
   const races = view.races.filter((r) => r.candidates.length > 0).map((r) => {
     const b = mine.find((x) => x.race_id === r.id);
     return { id: r.id, office: r.office, scope: r.scope, candidates: r.candidates.map(({ id, name, status }) => ({ id, name, status })),
       current: b ? { candidacyId: b.candidacy_id, revision: b.revision, receipt: b.receipt } : null };
   });
-  return { contestId, name: c.name, state: c.state, open: c.state === "open", eligible, races };
+  return { contestId, name: c.name, state: c.state, open: c.state === "open", eligible, secret, voted: voted ? { revisions: Number(voted.revisions) } : null, races };
 }
 
 export type Channel = "ussd" | "agent" | "web";
@@ -201,7 +207,12 @@ export type Channel = "ussd" | "agent" | "web";
  * who are still active. Casting again replaces the earlier choice (last ballot counts). `null` is an explicit abstention. Races not
  * named in `choices` are left as they were.
  */
-export async function castBallot(ctx: Ctx, p: { memberId: string; contestId: string; choices: Record<string, string | null>; channel: Channel; agentId?: string; notifyPhone?: string }) {
+export async function castBallot(ctx: Ctx, p: { memberId: string; contestId: string; choices: Record<string, string | null>; channel: Channel; agentId?: string; notifyPhone?: string; unit?: string | null }) {
+  if (await isSealed(ctx.db, p.contestId)) {
+    const r = await castEncrypted(ctx, { memberId: p.memberId, contestId: p.contestId, choices: p.choices, channel: p.channel, unit: p.unit });
+    if (p.notifyPhone) await ctx.sms.send(p.notifyPhone, t(ctx, "sms.voteCounted", r.receipts[0].receipt.slice(0, 8).toUpperCase())).catch(() => {});
+    return r;
+  }
   const entries = Object.entries(p.choices ?? {});
   if (!entries.length) return fail("nothing_to_do", "No choices given");
   for (const [raceId, cand] of entries) {
@@ -281,7 +292,9 @@ export async function agentVote(ctx: Ctx, agent: Admin, input: { phone: string; 
   const m = await verifyPin(ctx, input.phone, input.pin);
   const ward = (await ctx.db.query<{ ward: string | null }>("SELECT ward FROM members WHERE id=$1", [m.id]))[0]?.ward;
   if (!ward || ward !== agent.ward) return fail("wrong_ward", "Agent can only help members of their own ward", 403);
-  return castBallot(ctx, { memberId: m.id, contestId: input.contestId, choices: input.choices, channel: "agent", agentId: agent.id, notifyPhone: input.phone });
+  const row = (await ctx.db.query<{ record_enc: string }>("SELECT record_enc FROM members WHERE id=$1", [m.id]))[0];
+  const unit = row ? String((await ctx.keys.decrypt<Record<string, string>>(m.id, row.record_enc)).polling_unit ?? "") || null : null;
+  return castBallot(ctx, { memberId: m.id, contestId: input.contestId, choices: input.choices, channel: "agent", agentId: agent.id, notifyPhone: input.phone, unit });
 }
 
 // ---- Tally ------------------------------------------------------------------------------------
@@ -313,11 +326,13 @@ async function tallyWith(db: Db, contestId: string): Promise<RaceTally[]> {
 export async function results(ctx: Ctx, contestId: string) {
   const c = await contestRow(ctx.db, contestId);
   if (c.state !== "closed") return fail("results_not_ready", "Results are published when the contest closes", 423);
+  if (await isSealed(ctx.db, contestId)) return { contestId, name: c.name, ...(await encryptedResults(ctx, contestId)) };
   return { contestId, name: c.name, races: await tallyWith(ctx.db, contestId) };
 }
 
 /** Called inside the close transaction so the state change and the published results commit together. */
 export async function publishResults(ctx: Ctx, tx: Db, contestId: string): Promise<void> {
+  if (await isSealed(tx, contestId)) return; // a secret ballot is counted by the guardians (secret-ballot.ts openTally), not here
   for (const r of await tallyWith(tx, contestId)) {
     await ctx.events.emit(tx, { type: "race.turnout", data: { contest_id: contestId, race_id: r.raceId, ballots: r.ballots, abstained: r.abstained, eligible: r.eligible } });
     for (const k of r.candidates) await ctx.events.emit(tx, { type: "race.result", data: { contest_id: contestId, race_id: r.raceId, candidacy_id: k.candidacyId, votes: k.votes } });

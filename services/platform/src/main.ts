@@ -7,6 +7,7 @@ import { HttpTrustLog } from "./adapters.js";
 import { registerLab } from "./lab.js";
 import { sendRecordNotices } from "./record-notices.js";
 import { demoClockFn, type DemoClock } from "./demo.js";
+import { HttpEgClient } from "./eg-client.js";
 import { recordDeployment } from "./framework/deploy.js";
 
 const envNum = (k: string) => (process.env[k] ? Number(process.env[k]) : undefined);
@@ -22,7 +23,13 @@ const demo: DemoClock | undefined = process.env.DEMO_MODE === "1" ? { offsetMs: 
 if (demo && process.env.NODE_ENV === "production" && process.env.ALLOW_DEMO_IN_PRODUCTION !== "1")
   throw new Error("DEMO_MODE=1 with NODE_ENV=production. Demo mode seeds fake admins and moves the clock; it must never run with real members.");
 if (demo) console.warn("DEMO_MODE is ON: demo admins/members can be created and the clock can be moved. Do not use with real members.");
+// The secret ballot needs the ElectionGuard service (services/electionguard). Without EG_URL elections use the plain ballot box.
+const eg = process.env.EG_URL
+  ? new HttpEgClient(process.env.EG_URL, process.env.EG_TOKEN ?? "", { guardianOps: demo !== undefined && process.env.EG_DEMO_GUARDIANS === "1" })
+  : undefined;
+if (!eg) console.warn("EG_URL is not set: elections use the plain ballot box, which is NOT a secret ballot. See docs/voting.md.");
 const ctx = await createCtx({
+  eg,
   clock: demo ? demoClockFn(demo) : undefined,
   databaseUrl: process.env.DATABASE_URL,
   keyProvider,

@@ -166,6 +166,51 @@ CREATE TABLE IF NOT EXISTS ballots (
   PRIMARY KEY (contest_id, race_id, member_id)
 );
 
+-- ---- The secret ballot (docs/secret-ballot-recommendation.md). Ciphertext ballots carry NO member id. ----
+ALTER TABLE contests ADD COLUMN IF NOT EXISTS jurisdiction TEXT;   -- the country, state or municipality whose electoral committee supplies the guardians
+ALTER TABLE admins ADD COLUMN IF NOT EXISTS jurisdiction TEXT;
+CREATE TABLE IF NOT EXISTS guardians (
+  contest_id TEXT NOT NULL, admin_id TEXT NOT NULL, position INT NOT NULL,
+  public_key TEXT, backups TEXT, verified BOOLEAN,
+  appointed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (contest_id, admin_id), UNIQUE (contest_id, position)
+);
+CREATE TABLE IF NOT EXISTS election_keys (
+  contest_id TEXT PRIMARY KEY, n INT NOT NULL, quorum INT NOT NULL, joint_public_key TEXT NOT NULL,
+  manifest TEXT, manifest_hash TEXT, context TEXT, sealed_at TIMESTAMPTZ
+);
+-- Who has voted (turnout), with no link to any ballot. Only the day is kept.
+CREATE TABLE IF NOT EXISTS voted (
+  contest_id TEXT NOT NULL, member_id TEXT NOT NULL, revisions INT NOT NULL DEFAULT 1, last_day TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (contest_id, member_id)
+);
+-- The ballot box: ciphertext, an anonymous nullifier (same person, same nullifier, so a re-vote supersedes), the channel, the unit (agent
+-- ballots only) and the day. No member id, no exact time, no serial number.
+CREATE TABLE IF NOT EXISTS enc_ballots (
+  id TEXT PRIMARY KEY, contest_id TEXT NOT NULL, nullifier TEXT NOT NULL, ballot TEXT NOT NULL, ballot_code TEXT NOT NULL,
+  channel TEXT NOT NULL CHECK (channel IN ('ussd','agent','web')), unit TEXT, cast_day TIMESTAMPTZ NOT NULL, superseded BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE INDEX IF NOT EXISTS enc_ballots_nullifier ON enc_ballots(contest_id, nullifier);
+CREATE INDEX IF NOT EXISTS enc_ballots_code ON enc_ballots(contest_id, ballot_code);
+CREATE TABLE IF NOT EXISTS election_tallies (
+  contest_id TEXT NOT NULL, tally_set TEXT NOT NULL, tally TEXT NOT NULL, ballots INT NOT NULL, prepared_at TIMESTAMPTZ NOT NULL,
+  counts TEXT, plaintext_tally TEXT, opened_at TIMESTAMPTZ, guardians_present TEXT,
+  PRIMARY KEY (contest_id, tally_set)
+);
+CREATE TABLE IF NOT EXISTS guardian_shares (
+  contest_id TEXT NOT NULL, tally_set TEXT NOT NULL, admin_id TEXT NOT NULL, payload TEXT NOT NULL, at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (contest_id, tally_set, admin_id)
+);
+-- Paper copies kept at polling units, counted after the close and compared with the electronic count.
+CREATE TABLE IF NOT EXISTS paper_totals (
+  contest_id TEXT NOT NULL, unit TEXT NOT NULL, ballots INT NOT NULL, agent_id TEXT NOT NULL, at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (contest_id, unit)
+);
+CREATE TABLE IF NOT EXISTS paper_counts (
+  contest_id TEXT NOT NULL, unit TEXT NOT NULL, race_id TEXT NOT NULL, candidacy_id TEXT NOT NULL, n INT NOT NULL,
+  PRIMARY KEY (contest_id, unit, race_id, candidacy_id)
+);
+
 CREATE TABLE IF NOT EXISTS finance_ledger (
   id BIGSERIAL PRIMARY KEY,
   kind TEXT NOT NULL CHECK (kind IN ('dues','gift','form')),

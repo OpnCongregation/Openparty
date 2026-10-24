@@ -3,6 +3,7 @@ import { scopedCtx, type Ctx } from "./context.js";
 import { sha256hex } from "./crypto.js";
 import { fail } from "./errors.js";
 import * as contests from "./contests.js";
+import * as secretBallot from "./secret-ballot.js";
 
 /**
  * Roles. There is deliberately no "security" role (Electoral Act s.96(5)-(6)) and no super admin:
@@ -13,11 +14,13 @@ export type Role = (typeof ROLES)[number];
 
 const PERMISSIONS: Record<Role, string[]> = {
   // "candidate.stamp": every admin may give a vetting stamp on a candidate. A stamp is information for voters; nobody can remove a candidate.
-  secretary: ["contest.create", "notice.generate", "receipt.record", "approval.propose", "approval.approve", "race.manage", "candidate.stamp"],
-  electoral_committee: ["contest.create", "receipt.record", "approval.propose", "approval.approve", "race.manage", "candidate.stamp"],
+  // "guardian.act": the electoral committee members who are appointed guardians of a contest take part in its key ceremony and open its tally.
+  // "tally.prepare": add up the encrypted ballots (public maths, nothing is decrypted).
+  secretary: ["contest.create", "notice.generate", "receipt.record", "approval.propose", "approval.approve", "race.manage", "candidate.stamp", "tally.prepare"],
+  electoral_committee: ["contest.create", "receipt.record", "approval.propose", "approval.approve", "race.manage", "candidate.stamp", "guardian.act", "tally.prepare"],
   treasurer: ["gift.record", "finance.retry", "candidate.stamp"],
-  auditor: ["finance.report", "register.read", "access.read", "approval.approve", "candidate.stamp"],
-  tribunal: ["candidate.stamp"],
+  auditor: ["finance.report", "register.read", "access.read", "approval.approve", "candidate.stamp", "tally.prepare"],
+  tribunal: ["approval.approve", "candidate.stamp"], // an independent check: with the auditor it approves the guardians and the sealed ballot
   ward_agent: ["member.activate", "candidate.stamp"],
 };
 
@@ -93,6 +96,16 @@ const ACTIONS: Record<string, ActionSpec> = {
   "contest.open": {
     proposers: ["electoral_committee"], approvers: ["secretary", "auditor"], needed: 2,
     run: (ctx, p) => contests.openContest(ctx, p.contestId),
+  },
+  // The guardians and the sealed ballot description are set by people OUTSIDE the electoral committee's own approval, so the committee cannot
+  // pick its own guardians or ballot on its own.
+  "guardians.appoint": {
+    proposers: ["secretary"], approvers: ["auditor", "tribunal"], needed: 2,
+    run: (ctx, p) => secretBallot.appointGuardians(ctx, p),
+  },
+  "election.seal": {
+    proposers: ["secretary"], approvers: ["auditor", "tribunal"], needed: 2,
+    run: (ctx, p) => secretBallot.sealElection(ctx, p),
   },
   "contest.close": {
     proposers: ["electoral_committee"], approvers: ["secretary", "auditor"], needed: 2,

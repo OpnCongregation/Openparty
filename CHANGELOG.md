@@ -4,6 +4,16 @@ All notable changes. This project uses [semantic versioning](https://semver.org/
 
 ## 0.2.0 (unreleased)
 
+### Secret ballot (ElectionGuard) and guardians
+- New `services/electionguard` (Python 3.10, ElectionGuard reference library 1.4.0; internal only; no state, no guardian secrets): election description, key combination, encryption, encrypted tally, opening the total from any quorum's shares,
+  independent re-check. `guardian_tool` for the guardians' own device. 11 tests incl. opening the tally with 2 of 5 guardians absent, a dropped ballot and a tampered ballot.
+- Platform `secret-ballot.ts`: **five guardians from the electoral committee** (appointed by the secretary, approved by the auditor and the tribunal, matching the contest's jurisdiction), distributed key ceremony (public messages only),
+  `election.seal` (approved), encrypted casting with **no member id** (anonymous nullifier, day only, supersede on re-vote, separate turnout record), encrypted tally, shares from any 3 guardians, public record and ballots, independent verify,
+  paper counts and the paper-versus-electronic audit. With `EG_URL` set, voting cannot open on an unsealed election.
+- Screens: Guardians (their own steps and commands), Audit (record, independent check, paper audit and the agent's paper-count form), and the new desk steps (appoint, ceremony, seal, count). Demo shortcuts for the guardians (`EG_DEMO_GUARDIANS`).
+- Tribunal gains `approval.approve` (an independent check). Form-fee cap hook removed (owner: no cap). Docs: `docs/guardians.md`, `docs/pending-tasks.md`.
+- The ElectionGuard library logs raw cryptographic values at INFO: the service and the guardian tool switch logging off before importing it.
+
 ### Voting, phase 1: the ballot box (not a secret ballot; see docs/voting.md)
 - Offices (races) set by the secretary or electoral committee; **anyone who registers to compete is a candidate**, public by design (consent, name on the log, erasure blocked);
   every admin can only give a **vetting stamp** (vetted or flagged), which never removes a candidate; optional **form fee** per office, paid once and listed in one transaction with the ledger row.

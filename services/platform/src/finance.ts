@@ -147,6 +147,8 @@ export async function collectFormFee(ctx: Ctx, memberId: string, phone: string, 
   if (c.state === "listed") return fail("already_paid", "The form fee is already paid", 409);
   if (c.state !== "pending_payment") return fail("bad_state", "This candidacy was withdrawn", 409);
   if (c.contest_state === "open" || c.contest_state === "closed") return fail("candidacy_closed", "Candidacy closed when voting opened", 409);
+  const sealed = await ctx.db.query("SELECT 1 FROM election_keys k JOIN candidacies x ON x.contest_id=k.contest_id WHERE x.id=$1 AND k.sealed_at IS NOT NULL", [candidacyId]);
+  if (sealed.length) return fail("candidacy_closed", "Candidacy closed when the election was sealed", 409);
   if (!(Number(c.fee_minor) > 0)) return fail("no_fee", "There is no fee to pay", 409);
   return collect(ctx, { kind: "form", purposeId: candidacyId }, memberId, phone, Number(c.fee_minor), `form:${candidacyId}`);
 }

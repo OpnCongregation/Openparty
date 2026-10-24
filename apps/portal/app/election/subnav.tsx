@@ -7,6 +7,8 @@ const LINKS: [string, string][] = [
   ["/election/vote", "Vote online"],
   ["/election/unit", "Polling unit"],
   ["/election/desk", "Admin desk"],
+  ["/election/guardian", "Guardians"],
+  ["/election/audit", "Audit"],
 ];
 
 export function SubNav() {

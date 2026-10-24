@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
-import { createCtx } from "../src/platform.js";
+import { createCtx, type PlatformOptions } from "../src/platform.js";
 import { MemoryTrustLog, SimSms } from "../src/adapters.js";
 import { registerAdmin, signingString, type Role } from "../src/admin.js";
 import { DAY, type Ctx } from "../src/context.js";
@@ -7,11 +7,11 @@ import { activateMember, confirmJoin, prepareJoin } from "../src/members.js";
 
 export const T0 = new Date("2026-11-01T09:00:00Z");
 
-export async function setup() {
+export async function setup(extra: Partial<PlatformOptions> = {}) {
   const state = { now: new Date(T0) };
   const log = new MemoryTrustLog();
   const sms = new SimSms();
-  const ctx = await createCtx({ log, sms, clock: () => new Date(state.now) });
+  const ctx = await createCtx({ log, sms, clock: () => new Date(state.now), ...extra });
   return { ctx, log, sms, state, advance: (days: number) => (state.now = new Date(state.now.getTime() + days * DAY)) };
 }
 

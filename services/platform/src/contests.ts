@@ -247,6 +247,10 @@ export async function openContest(ctx: Ctx, contestId: string) {
   if (!c.register_id) return fail("no_register", "Register not frozen", 423);
   const reg = await ctx.db.query<{ inec_receipt: string | null }>("SELECT inec_receipt FROM registers WHERE id=$1", [c.register_id]);
   if (!reg[0]?.inec_receipt) return fail("no_register_receipt", "INEC register receipt not recorded", 423);
+  // With the ballot-encryption service configured, voting opens only on a SEALED election (guardians appointed, keys made, ballot fixed),
+  // unless the owner explicitly allows the plain ballot box for a trial (ALLOW_PLAIN_BALLOT=1).
+  if (ctx.eg && process.env.ALLOW_PLAIN_BALLOT !== "1" && !(await ctx.db.query("SELECT 1 FROM election_keys WHERE contest_id=$1 AND sealed_at IS NOT NULL", [contestId])).length)
+    return fail("not_sealed", "The election is not sealed: appoint the guardians, run the key ceremony and seal the ballot before voting opens", 423);
   if (ctx.clock().getTime() < new Date(c.vote_date).getTime()) return fail("too_early", "Voting cannot open before the vote date", 425);
   if (await rulesHash(ctx) !== c.rules_hash) return fail("rules_changed", "Rules differ from those in the notice", 500);
   await ctx.commit(async (tx) => {

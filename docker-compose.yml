@@ -85,13 +85,33 @@ services:
       PEPPERS: ${PEPPERS:-}
       PEPPER_ACTIVE: ${PEPPER_ACTIVE:-}
       REF_PEPPER_HEX: ${REF_PEPPER_HEX:-}
+      # The secret ballot: the ElectionGuard service (below). With it, voting opens only on a SEALED election (guardians, keys, fixed ballot).
+      EG_URL: http://electionguard:8090
+      EG_TOKEN: ${EG_TOKEN:?set in .env (16+ characters, shared with the electionguard service)}
+      # Demo only: lets the platform's demo mode run the guardians' steps itself. Real guardians use services/electionguard guardian_tool on their own device.
+      EG_DEMO_GUARDIANS: ${EG_DEMO_GUARDIANS:-0}
+      # 1 = allow opening voting WITHOUT a sealed election (the plain, NOT secret ballot box). For a trial only.
+      ALLOW_PLAIN_BALLOT: ${ALLOW_PLAIN_BALLOT:-0}
     volumes: ["./reports:/reports:ro"]
     depends_on:
       postgres: { condition: service_healthy }
       trustlog: { condition: service_started }
+      electionguard: { condition: service_started }
     # Loopback only: admin routes, the USSD webhook and the lab must not be reachable straight from the network.
     # Production: terminate TLS in a reverse proxy on the host or in the compose network and expose only the routes it needs.
     ports: ["127.0.0.1:3000:3000"]
+
+  # The encrypted count (ElectionGuard reference library, Python). Internal only: no published port, reached by the platform over the compose
+  # network with a shared token. It holds no state and no guardian secrets; every call carries what it needs. See services/electionguard.
+  electionguard:
+    restart: unless-stopped
+    build: ./services/electionguard
+    environment:
+      EG_TOKEN: ${EG_TOKEN:?set in .env}
+      EG_ENABLE_GUARDIAN_OPS: ${EG_DEMO_GUARDIANS:-0}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   # A DEVELOPMENT Vault (in memory, root token "root"): for trying KEY_PROVIDER=vault locally with `docker compose --profile vault up`.
   # Production Vault needs persistent storage, TLS, auto-unseal (ideally an HSM or cloud KMS seal), HA and least-privilege policies.

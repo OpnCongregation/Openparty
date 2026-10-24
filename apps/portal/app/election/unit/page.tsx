@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { BallotPaper, initialPicks, toChoices, type BallotRace, type Picks } from "../ballot";
 import { call, errorText, store, useDemoKit, type Identity } from "../lib";
 
-interface View { contestId: string; name: string; open: boolean; eligible: boolean; state: string; races: BallotRace[] }
+interface View { contestId: string; name: string; open: boolean; eligible: boolean; state: string; secret: boolean; voted: { revisions: number } | null; races: BallotRace[] }
 
 /**
  * A polling-unit terminal run by a ward agent. The agent signs in with their own key; the voter types their own phone and PIN on the
@@ -81,6 +81,7 @@ export default function Unit() {
           <div className="msg ok" role="status">
             <strong>Vote counted.</strong> Receipt <span className="receipt">{done.receipt}</span>
             <p className="muted small">Offices voted: {done.n}. The receipt does not show the choice. A confirmation SMS was sent.</p>
+            <p className="small"><strong>Paper copy:</strong> the voter marks the same choices on the unit&apos;s paper slip, writes the receipt above on it and drops it in the box. After voting closes the agent counts the paper and reports it on the <a href="/election/audit">audit page</a>, where it is compared with the electronic count.</p>
             <button className="big" onClick={reset}>Next voter</button>
           </div>
         )}
@@ -103,6 +104,7 @@ export default function Unit() {
         {view && view.open && view.eligible && (
           <>
             <h2>{view.name}</h2>
+            {view.voted && <div className="msg">This member has already voted. Voting again replaces the earlier ballot completely.</div>}
             <BallotPaper big races={view.races} picks={picks} onPick={(r, v) => setPicks((p) => ({ ...p, [r]: v }))} />
             <div className="row">
               <button className="big" disabled={busy || unanswered > 0 || !view.races.length} onClick={cast}>Cast vote</button>

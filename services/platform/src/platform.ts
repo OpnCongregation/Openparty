@@ -19,6 +19,8 @@ export interface PlatformOptions {
   /** Floor + law pack + party settings. Defaults to the bundled reference configuration. */
   config?: Config;
   idAdapter?: IdAdapter;
+  /** The ElectionGuard service client. Without it elections use the plain ballot box. */
+  eg?: import("./eg-client.js").EgClient;
   sms?: Sms;
   payments?: Payments;
   clock?: () => Date;
@@ -57,6 +59,7 @@ export async function createCtx(o: PlatformOptions = {}): Promise<Ctx> {
       return r;
     },
     clock: o.clock ?? (() => new Date()),
+    eg: o.eg,
   };
 }
 

@@ -12,3 +12,5 @@ reports/
 services/trustlog/trustlog
 services/trustlog/data/
 *.log
+.pytest_cache/
+__pycache__/

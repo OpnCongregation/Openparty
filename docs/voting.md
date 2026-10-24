@@ -1,9 +1,12 @@
-# Voting: phase 1 (the ballot box)
+# Voting
+
+Two layers. **The ballot box** (below, phase 1) enforces who may stand and vote and counts the votes. **The secret ballot** (section at the end) sits on top of it
+when the ElectionGuard service is configured, and is what a real contest must use. Guardians' runbook: `docs/guardians.md`. Everything still to do: `docs/pending-tasks.md`.
 
 What is built, how it behaves, and what it is **not**. The secret-ballot design is in `docs/secret-ballot-recommendation.md`.
 
-> **Not a secret ballot.** The `ballots` table stores the voter next to the choice, so anyone with database access can see who voted for whom.
-> The public log shows only counts and anonymous receipts. Use this phase to try the flow and test the gates. Do not run a real contest on it.
+> **The plain ballot box is not a secret ballot.** Without the ElectionGuard service the `ballots` table stores the voter next to the choice. Use it only to try the flow.
+> With the service configured (`EG_URL`), voting cannot open on an election that has not been **sealed** for the secret ballot (see the last section).
 
 ## The rules it enforces
 
@@ -54,10 +57,40 @@ overridden. Never use it with real members. Seeding twice leaves earlier demo co
 
 ## Known limits of this phase
 
-- **Not secret** (above). **Not receipt-free in the strong sense:** the receipt proves a ballot was counted and reveals no choice, but the database can still link voter and choice.
-- **No legal cap on form fees.** `createRace` honours an optional pack setting `candidacy.max_form_fee_minor`; the bundled Nigeria pack sets none (owner decision).
+- **The plain ballot box is not secret** (above). With the service, see the secret-ballot section and its limits.
+- **No cap on form fees** (owner decision).
 - **A withdrawn candidate's paid fee is not refunded** by this code.
 - **Tie-breaks are the constitution's job.** A tie is reported as a tie; no winner is chosen.
 - **One choice per office.** No ranked or multi-seat ballots yet.
 - **Candidate names** come from the identity check and must be letters only to be published; otherwise the member is asked to see a ward agent.
 - English only.
+
+## The secret ballot (phases 2 and 3)
+
+Built on the ElectionGuard reference library (a separate Python service, `services/electionguard`); no cryptography of our own.
+
+**Who holds the keys.** Five **guardians**, all members of the electoral committee for the contest's country, state or municipality. The secretary names them; the **auditor and the tribunal** approve
+(so the committee cannot pick its own guardians). Each makes a secret key **on their own device** with `guardian_tool`; the platform only ever sees public messages. **Any three** can open the **total**.
+Never a single ballot, and never fewer than three.
+
+**Order of events.** Offices and candidates, then: notice, register frozen, receipts, **appoint guardians** (approved), **key ceremony** (guardians), **seal the election** (approved: the ballot
+description is published and fixed; nobody can stand or be added after), open on the vote date, voting, close, **add up the encrypted ballots** (public maths), **three guardians post shares**,
+the total opens, results are published and the log carries turnout and per-candidate counts. With the service configured, opening is refused unless the election is sealed.
+
+**What is stored.** A ciphertext, an anonymous nullifier (so a second ballot from the same person replaces the first; the earlier one is marked superseded, not deleted), the channel, the polling unit
+(polling-unit ballots only) and the **day**. No member id, no time of day, no serial number. Who has voted is kept in a separate table, with no link to any ballot. Ballots are published in
+ballot-code order, not arrival order. The platform cannot show a member what they chose before, only that they voted.
+
+**Paper at polling units.** Every ballot cast at a unit also leaves a paper copy. After the close the ward agent reports the paper count once per unit. The audit compares paper ballots with electronic
+ballots per unit, and, once the guardians have also opened the polling-unit total, the paper choices with the electronic ones. Any difference is shown, never hidden.
+
+**Endpoints.** Public: `GET /public/config`, `/public/election/:id/record`, `/ballots` (paged), `/audit`, `/verify`. Guardians (signed): `GET /guardian/ceremony/:id`, `POST /guardian/ceremony/:id/key|backups|verify`,
+`POST /guardian/shares/:id/:set`. Admin: approved actions `guardians.appoint` and `election.seal`; `POST /admin/contests/:id/tally`. Agent (signed): `POST /agent/paper-count`.
+Screens: `/election/guardian`, `/election/audit`, and the new steps on `/election/desk`.
+
+**Trying it locally.** `docker compose up` starts the service (internal only). With `DEMO_MODE=1`, `EG_DEMO_GUARDIANS=1` the desk's *Demo* buttons run the five guardians' steps for you. Tests: `node scripts/test-electionguard.mjs`
+runs a whole election (five-guardian ceremony, three channels, a tally opened by three guardians, the independent check, the paper audit) on the real library.
+
+**Honest limits** (full list in `docs/pending-tasks.md`): the nullifier is a keyed hash, so someone holding the platform's secret key and the database could re-link a member to a ballot until the anonymous membership
+proof is built; every channel is encrypted **by the server** (the choice is in server memory once), which matters most for USSD voting, which the owner has made binding; all five guardians being electoral-committee members
+concentrates trust; the library is slow and old; and no independent audit has been done.

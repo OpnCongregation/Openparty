@@ -6,6 +6,7 @@ import * as members from "./members.js";
 import * as contests from "./contests.js";
 import { completeRecord } from "./record-notices.js";
 import * as election from "./election.js";
+import * as sb from "./secret-ballot.js";
 import { PgLimiter } from "./ratelimit.js";
 import { registerDemo, type DemoClock } from "./demo.js";
 import * as finance from "./finance.js";
@@ -60,6 +61,8 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
   };
 
   // Server time, so a browser that signs admin requests can use the platform's clock (which a demo can move) instead of its own.
+  // What this deployment can do, so the screens know whether to show the guardian steps.
+  app.get("/public/config", async () => ({ secretBallot: !!ctx.eg, plainBallotAllowed: process.env.ALLOW_PLAIN_BALLOT === "1", demoGuardians: !!ctx.eg?.guardian }));
   app.get("/public/time", async () => ({ now: ctx.clock().toISOString() }));
   if (opts.demo) registerDemo(app, ctx, opts.demo);
 
@@ -91,6 +94,27 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
   app.post("/election/pay-form", member((b) => election.payForm(ctx, b)));
   app.post("/election/withdraw", member((b) => election.withdrawCandidate(ctx, b).then(() => ({ ok: true }))));
   app.post("/election/mine", member((b) => election.myCandidacies(ctx, b)));
+  // The secret ballot. Public record and audit (anyone), the guardians' own steps (signed, appointed guardians only), tally and paper counts.
+  app.get("/public/election/:contestId/record", async (req) => sb.publicRecord(ctx, (req.params as any).contestId));
+  app.get("/public/election/:contestId/ballots", async (req) => {
+    const q = (req.query ?? {}) as { after?: string; limit?: string };
+    return sb.publicBallots(ctx, (req.params as any).contestId, q.after, Number(q.limit ?? 100));
+  });
+  app.get("/public/election/:contestId/audit", async (req) => sb.paperAudit(ctx, (req.params as any).contestId));
+  app.get("/public/election/:contestId/verify", async (req) => sb.verifyRecord(ctx, (req.params as any).contestId));
+  app.get("/guardian/ceremony/:contestId", guarded("guardian.act", (a, req) => sb.ceremonyView(ctx, a, req.params.contestId)));
+  app.post("/guardian/ceremony/:contestId/key", guarded("guardian.act", (a, req) => sb.postKey(ctx, a, req.params.contestId, req.body?.public).then(() => ({ ok: true }))));
+  app.post("/guardian/ceremony/:contestId/backups", guarded("guardian.act", (a, req) => sb.postBackups(ctx, a, req.params.contestId, req.body?.backups).then(() => ({ ok: true }))));
+  app.post("/guardian/ceremony/:contestId/verify", guarded("guardian.act", (a, req) => sb.postVerification(ctx, a, req.params.contestId, req.body ?? {})));
+  app.post("/guardian/shares/:contestId/:set", guarded("guardian.act", (a, req) => sb.submitShares(ctx, a, req.params.contestId, req.params.set, req.body)));
+  app.post("/admin/contests/:contestId/tally", guarded("tally.prepare", async (_a, req) => {
+    const out = await sb.prepareTally(ctx, req.params.contestId, "all");
+    // the polling-unit total is prepared too when any ballots were cast at units, so the paper can be checked against it
+    const agentBallots = Number((await ctx.db.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM enc_ballots WHERE contest_id=$1 AND channel='agent' AND NOT superseded", [req.params.contestId]))[0].n);
+    const unitTotal = agentBallots > 0 ? await sb.prepareTally(ctx, req.params.contestId, "agent") : null;
+    return { all: out, units: unitTotal };
+  }));
+  app.post("/agent/paper-count", guarded("member.activate", (a, req) => sb.submitPaperCount(ctx, a, req.body ?? {}).then(() => ({ ok: true }))));
   app.post("/agent/vote", guarded("member.activate", (a, req) => election.agentVote(ctx, a, req.body ?? {})));
   app.post("/admin/races", guarded("race.manage", (a, req) => election.createRace(ctx, a, req.body ?? {})));
   app.post("/admin/candidates/:id/stamp", guarded("candidate.stamp", (a, req) => election.stampCandidate(ctx, a, req.params.id, req.body?.verdict, req.body?.note).then(() => ({ ok: true }))));

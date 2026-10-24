@@ -15,6 +15,7 @@ export default function Overview() {
   const [races, setRaces] = useState<Race[]>([]);
   const [results, setResults] = useState<Result[] | null>(null);
   const [msg, setMsg] = useState("");
+  const [sec, setSec] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (rows && !pick && rows.length && kitReady) setPick(kit && rows.some((c) => c.id === kit.contestId) ? kit.contestId : defaultContest(rows));
@@ -26,7 +27,7 @@ export default function Overview() {
     (async () => {
       const r = await call("GET", `/public/election/${pick}`);
       if (!r.ok) return setMsg(errorText(r));
-      setRaces(r.data.races);
+      setRaces(r.data.races); setSec(!!r.data.sealed);
       if (r.data.state === "closed") {
         const res = await call("GET", `/public/election/${pick}/results`);
         if (res.ok) setResults(res.data.races);
@@ -41,7 +42,8 @@ export default function Overview() {
     <>
       <h1>Candidates and results</h1>
       <p className="lead">Everyone who registers to compete is a candidate. Admins can only add a vetting stamp. Candidates and their names are public.</p>
-      <div className="banner"><strong>Early version.</strong> This is the ballot box without the secret-ballot layer: the database links each voter to their choice. It is for trying the flow, not for a real contest. The public log shows only counts and anonymous receipts.</div>
+      {sec === false && <div className="banner"><strong>Plain ballot box.</strong> This contest was not sealed for a secret ballot: the database links each voter to their choice. It is for trying the flow, not for a real contest.</div>}
+      {sec === true && <div className="banner demo"><strong>Secret ballot.</strong> Votes are encrypted, the platform keeps no link between a voter and a ballot, and only five guardians (any three together) can open the <em>total</em>. <a href="/election/audit">See the audit</a>.</div>}
 
       {err && <div className="msg err">{err}. Is the platform running?</div>}
       {rows && !rows.length && <div className="msg">No contests yet. Open the <a href="/election/desk">admin desk</a> to set one up.</div>}
