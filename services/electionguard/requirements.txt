@@ -1,7 +1,7 @@
 # Exact versions (what the image was tested with). electionguard itself is installed separately in the Dockerfile, without its declared
 # dependencies (they pull in GUI and database libraries that need a C compiler and that this service never uses).
 click==8.5.0
-dacite==1.6.0
+dacite==1.9.2
 dependency-injector==4.49.1
 gmpy2==2.3.2
 packaging==26.3
