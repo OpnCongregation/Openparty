@@ -21,6 +21,8 @@ export interface PlatformOptions {
   idAdapter?: IdAdapter;
   /** The ElectionGuard service client. Without it elections use the plain ballot box. */
   eg?: import("./eg-client.js").EgClient;
+  /** The anonymous membership proof configuration (depth and artifacts directory). */
+  semaphore?: import("./semaphore.js").SemaphoreConfig;
   sms?: Sms;
   payments?: Payments;
   clock?: () => Date;
@@ -60,6 +62,7 @@ export async function createCtx(o: PlatformOptions = {}): Promise<Ctx> {
     },
     clock: o.clock ?? (() => new Date()),
     eg: o.eg,
+    semaphore: o.semaphore,
   };
 }
 

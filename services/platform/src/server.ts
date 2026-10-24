@@ -7,6 +7,8 @@ import * as contests from "./contests.js";
 import { completeRecord } from "./record-notices.js";
 import * as election from "./election.js";
 import * as sb from "./secret-ballot.js";
+import { createReadStream, existsSync } from "node:fs";
+import { join } from "node:path";
 import { PgLimiter } from "./ratelimit.js";
 import { registerDemo, type DemoClock } from "./demo.js";
 import * as finance from "./finance.js";
@@ -62,7 +64,7 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
 
   // Server time, so a browser that signs admin requests can use the platform's clock (which a demo can move) instead of its own.
   // What this deployment can do, so the screens know whether to show the guardian steps.
-  app.get("/public/config", async () => ({ secretBallot: !!ctx.eg, plainBallotAllowed: process.env.ALLOW_PLAIN_BALLOT === "1", demoGuardians: !!ctx.eg?.guardian }));
+  app.get("/public/config", async () => ({ secretBallot: !!ctx.eg, semaphoreDepth: ctx.semaphore?.depth ?? null, plainBallotAllowed: process.env.ALLOW_PLAIN_BALLOT === "1", demoGuardians: !!ctx.eg?.guardian }));
   app.get("/public/time", async () => ({ now: ctx.clock().toISOString() }));
   if (opts.demo) registerDemo(app, ctx, opts.demo);
 
@@ -91,6 +93,23 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
   app.post("/election/ballot", member((b) => election.webBallot(ctx, b)));
   app.post("/election/vote", member((b) => election.webVote(ctx, b)));
   app.post("/election/apply", member((b) => election.registerCandidate(ctx, b)));
+  app.post("/election/identity", member((b) => election.registerIdentity(ctx, b)));
+  // ANONYMOUS cast: no phone, no PIN. Only the choices and a zero-knowledge proof of membership. Throttled per address, not per person.
+  app.post("/election/cast", async (req: any, reply: any) => {
+    if (!(await voteLimit.take(req.ip))) return reply.code(429).header("Retry-After", 60).send({ error: "rate_limited" });
+    const b = req.body ?? {};
+    return reply.send(await sb.castAnonymous(ctx, { contestId: b.contestId, ballotId: b.ballotId, choices: b.choices, proof: b.proof }));
+  });
+  // The proving files, served from here so a voter's browser never depends on a third-party host. Immutable, and checked by hash at build.
+  app.get("/public/semaphore/:depth/:file", async (req: any, reply: any) => {
+    const cfg = ctx.semaphore;
+    if (!cfg || String(cfg.depth) !== req.params.depth || !["semaphore.wasm", "semaphore.zkey"].includes(req.params.file)) return reply.code(404).send({ error: "not_found" });
+    const f = join(cfg.artifactsDir, `semaphore-${cfg.depth}.${req.params.file.split(".")[1]}`);
+    if (!existsSync(f)) return reply.code(404).send({ error: "not_found" });
+    return reply.header("Cache-Control", "public, max-age=31536000, immutable").type(req.params.file.endsWith("wasm") ? "application/wasm" : "application/octet-stream").send(createReadStream(f));
+  });
+  app.get("/public/election/:contestId/group", async (req: any) => (await sb.publicGroup(ctx.db, req.params.contestId)) ?? { error: "no_group" });
+  app.post("/agent/reset-identity", guarded("member.activate", (a, req) => election.resetIdentity(ctx, a, req.body ?? {}).then(() => ({ ok: true }))));
   app.post("/election/pay-form", member((b) => election.payForm(ctx, b)));
   app.post("/election/withdraw", member((b) => election.withdrawCandidate(ctx, b).then(() => ({ ok: true }))));
   app.post("/election/mine", member((b) => election.myCandidacies(ctx, b)));

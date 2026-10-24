@@ -3,7 +3,7 @@
 **Status (2026-10-24): largely built.** Owner decisions: USSD voting is **binding**; the five guardians are members of the **electoral committee** for the country, state or municipality; the Python ElectionGuard service is accepted;
 polling units keep **paper** for auditing while the **primary means of voting is digital**; **no cap** on form fees.
 **Built:** the anonymous ballot store (no member id), ElectionGuard encryption, the five-guardian ceremony with a guardian tool, sealing, tally opened by any three, public record and independent re-check, paper audit.
-**Not built (see `docs/pending-tasks.md`):** the Semaphore anonymous membership proof (phase 2's cryptographic half), encryption on the voter's own device, an HSM-held voting key for USSD, decryption-proof verification, ceremony reset, an independent audit.
+**Anonymous membership proof (Semaphore): built (2026-10-24)** for voters with a device identity; assisted identities (USSD, terminal) are derived by the platform. **Not built (see `docs/pending-tasks.md`):** encryption on the voter's own device, an HSM-held voting key for USSD, decryption-proof verification, ceremony reset, an independent audit.
 The rest of this document is the original recommendation, kept as the reasoning.
 
 ## What "secret ballot" must mean here

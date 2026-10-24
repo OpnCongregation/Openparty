@@ -8,6 +8,8 @@ import { registerLab } from "./lab.js";
 import { sendRecordNotices } from "./record-notices.js";
 import { demoClockFn, type DemoClock } from "./demo.js";
 import { HttpEgClient } from "./eg-client.js";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { recordDeployment } from "./framework/deploy.js";
 
 const envNum = (k: string) => (process.env[k] ? Number(process.env[k]) : undefined);
@@ -28,8 +30,15 @@ const eg = process.env.EG_URL
   ? new HttpEgClient(process.env.EG_URL, process.env.EG_TOKEN ?? "", { guardianOps: demo !== undefined && process.env.EG_DEMO_GUARDIANS === "1" })
   : undefined;
 if (!eg) console.warn("EG_URL is not set: elections use the plain ballot box, which is NOT a secret ballot. See docs/voting.md.");
+// The anonymous membership proof (Semaphore) is part of the secret ballot: its proving files must be present (scripts/fetch-semaphore-artifacts.mjs).
+const semaphore = eg ? { depth: Number(process.env.SEMAPHORE_DEPTH ?? 20), artifactsDir: process.env.SEMAPHORE_ARTIFACTS_DIR ?? join(process.cwd(), "semaphore-artifacts") } : undefined;
+if (semaphore) for (const ext of ["wasm", "zkey"]) {
+  const f = join(semaphore.artifactsDir, `semaphore-${semaphore.depth}.${ext}`);
+  if (!existsSync(f)) throw new Error(`Missing ${f}. Run: node scripts/fetch-semaphore-artifacts.mjs ${semaphore.depth}`);
+}
 const ctx = await createCtx({
   eg,
+  semaphore,
   clock: demo ? demoClockFn(demo) : undefined,
   databaseUrl: process.env.DATABASE_URL,
   keyProvider,

@@ -59,8 +59,8 @@ The **Guardians** page (`/election/guardian`) shows the exact command for your n
 
 ## What this does not protect against
 
-- **All five guardians are on the electoral committee** (an owner decision). Three of them colluding could decrypt individual ballots. The ballots carry no voter identity, but with the
-  platform's nullifier key and the database, the operator and three guardians together could in principle re-link a ballot to a member. The usual remedy is guardians from
+- **All five guardians are on the electoral committee** (an owner decision). Three of them colluding could decrypt individual ballots. The ballots carry no voter identity, and for voters with a device
+  identity the platform cannot link a ballot to a member at all; for assisted voters (USSD, terminal) the operator, holding the platform's reference key, could re-link a ballot to a member. The usual remedy is guardians from
   independent bodies (the original design had the tribunal, the auditor and two civil-society witnesses); consider adding at least two independent guardians.
 - **USSD and polling-unit ballots are encrypted by the server** (those voters cannot encrypt on their own device), so the choice passes through server memory once.
 - **Timing and network metadata** (IP addresses, SMS gateway logs) can link a voter to a time even though the ballot is anonymous.

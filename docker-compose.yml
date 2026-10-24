@@ -87,6 +87,8 @@ services:
       REF_PEPPER_HEX: ${REF_PEPPER_HEX:-}
       # The secret ballot: the ElectionGuard service (below). With it, voting opens only on a SEALED election (guardians, keys, fixed ballot).
       EG_URL: http://electionguard:8090
+      # Size of the tree of voters for the anonymous membership proof: 20 allows about one million members.
+      SEMAPHORE_DEPTH: ${SEMAPHORE_DEPTH:-20}
       EG_TOKEN: ${EG_TOKEN:?set in .env (16+ characters, shared with the electionguard service)}
       # Demo only: lets the platform's demo mode run the guardians' steps itself. Real guardians use services/electionguard guardian_tool on their own device.
       EG_DEMO_GUARDIANS: ${EG_DEMO_GUARDIANS:-0}

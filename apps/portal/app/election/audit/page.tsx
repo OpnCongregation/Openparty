@@ -25,7 +25,7 @@ export default function AuditPage() {
   const [audit, setAudit] = useState<Audit | null>(null);
   const [auditMsg, setAuditMsg] = useState("");
   const [races, setRaces] = useState<Race[]>([]);
-  const [verify, setVerify] = useState<{ ok: boolean; problems: string[]; ballots: number } | string | null>(null);
+  const [verify, setVerify] = useState<{ ok: boolean; problems: string[]; ballots: number; eligibilityChecked?: number } | string | null>(null);
   const [agent, setAgent] = useState<Identity | null>(null);
   const [unit, setUnit] = useState("");
   const [paperBallots, setPaperBallots] = useState("");
@@ -98,7 +98,7 @@ export default function AuditPage() {
               <button disabled={busy || !rec.tallies.length} onClick={check}>Run the independent check</button>
             </p>
             {verify && typeof verify === "string" && <div className="msg err">{verify}</div>}
-            {verify && typeof verify !== "string" && <div className={`msg ${verify.ok ? "ok" : "err"}`}>{verify.ok ? `Checked ${verify.ballots} ballots: every ballot is a valid encryption and the encrypted total is exactly their sum.` : `Problems: ${verify.problems.join("; ")}`}<div className="muted small">This does not yet check each guardian&apos;s decryption proofs; an independent verifier should (see docs).</div></div>}
+            {verify && typeof verify !== "string" && <div className={`msg ${verify.ok ? "ok" : "err"}`}>{verify.ok ? `Checked ${verify.ballots} counted ballots: every ballot is a valid encryption, the encrypted total is exactly their sum, and ${verify.eligibilityChecked ?? 0} membership proofs confirm each ballot came from a voter on the published list, no one counted twice.` : `Problems: ${verify.problems.join("; ")}`}<div className="muted small">This does not yet check each guardian&apos;s decryption proofs; an independent verifier should (see docs).</div></div>}
           </div>
         </>
       )}

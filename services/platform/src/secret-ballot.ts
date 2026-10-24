@@ -4,6 +4,7 @@ import type { Db } from "./db.js";
 import { fail } from "./errors.js";
 import { require_, type Admin } from "./admin.js";
 import type { EgClient, Submission } from "./eg-client.js";
+import { buildGroup, checkProof, groupOf, proveAssisted, semOf } from "./semaphore.js";
 
 /**
  * The secret ballot (phases 2 and 3 of docs/secret-ballot-recommendation.md), on top of the ElectionGuard service.
@@ -188,9 +189,12 @@ export async function sealElection(ctx: Ctx, input: { contestId: string }) {
   const eg = egOf(ctx);
   const c = await contest(ctx.db, input.contestId);
   if (c.state !== "draft" && c.state !== "noticed") return fail("bad_state", "The election is sealed before voting opens", 409);
+  semOf(ctx); // the anonymous membership proof must be configured
   const keys = await keysOf(ctx.db, c.id);
   if (!keys) return fail("no_keys", "The guardians have not finished the key ceremony", 409);
   if (keys.sealed_at) return fail("already_sealed", "Already sealed", 409);
+  const registerId = (await ctx.db.query<{ register_id: string | null }>("SELECT register_id FROM contests WHERE id=$1", [c.id]))[0].register_id;
+  if (!registerId) return fail("no_register", "Freeze the register first: the group of voters is built from it when the election is sealed", 409);
   const races = await ctx.db.query<{ id: string; office: string; scope: string }>("SELECT id, office, scope FROM races WHERE contest_id=$1 ORDER BY created_at, id", [c.id]);
   const spec: { id: string; title: string; candidates: { id: string; name: string }[] }[] = [];
   for (const r of races) {
@@ -205,11 +209,25 @@ export async function sealElection(ctx: Ctx, input: { contestId: string }) {
     const r = await tx.query("UPDATE election_keys SET manifest=$2, manifest_hash=$3, context=$4, sealed_at=$5 WHERE contest_id=$1 AND sealed_at IS NULL RETURNING 1",
       [c.id, man.manifest, man.manifest_hash, context, ctx.clock().toISOString()]);
     if (!r.length) return fail("already_sealed", "Already sealed", 409);
+    const grp = await buildGroup(ctx, tx, c.id, registerId);
+    await ctx.events.emit(tx, { type: "group.built", data: { contest_id: c.id, size: grp.size, depth: grp.depth, root: grp.rootHex } });
     await ctx.events.emit(tx, { type: "election.sealed", data: { contest_id: c.id, manifest_hash: sha(man.manifest), context_hash: sha(context), races: spec.length } });
   });
 }
 
 // ---- Casting ----------------------------------------------------------------------------------------------------------
+
+/** Every office answered, every candidate on the ballot. A re-vote replaces the whole of the earlier ballot, so the ballot must be whole. */
+async function validateChoices(ctx: Ctx, contestId: string, choices: Record<string, string | null>) {
+  const races = await ctx.db.query<{ id: string }>("SELECT DISTINCT r.id FROM races r JOIN candidacies k ON k.race_id=r.id AND k.state='listed' WHERE r.contest_id=$1", [contestId]);
+  const want = new Set(races.map((r) => r.id));
+  const got = Object.keys(choices ?? {});
+  if (got.length !== want.size || !got.every((g) => want.has(g))) return fail("bad_choice", "Choose a candidate, or abstain, in every office", 422);
+  for (const [raceId, cand] of Object.entries(choices)) {
+    if (cand !== null && !(typeof cand === "string" && (await ctx.db.query("SELECT 1 FROM candidacies WHERE id=$1 AND race_id=$2 AND state='listed'", [cand, raceId])).length))
+      return fail("bad_choice", "That candidate is not on this ballot", 422);
+  }
+}
 
 /**
  * A member's ballot, encrypted. The choices are encrypted by the ElectionGuard service (the voter is on a phone or at a terminal that
@@ -223,23 +241,19 @@ export async function castEncrypted(ctx: Ctx, p: {
   const keys = (await keysOf(ctx.db, p.contestId)) ?? fail("not_found", "No election keys", 404);
   if (!keys.sealed_at || !keys.manifest || !keys.context) return fail("not_open", "The election is not sealed", 423);
 
-  // Everything on the ballot must be answered, because a later ballot replaces the whole of the earlier one.
-  const races = await ctx.db.query<{ id: string }>("SELECT DISTINCT r.id FROM races r JOIN candidacies k ON k.race_id=r.id AND k.state='listed' WHERE r.contest_id=$1", [p.contestId]);
-  const want = new Set(races.map((r) => r.id));
-  const got = Object.keys(p.choices);
-  if (got.length !== want.size || !got.every((g) => want.has(g))) return fail("bad_choice", "Choose a candidate, or abstain, in every office", 422);
-  for (const [raceId, cand] of Object.entries(p.choices)) {
-    if (cand !== null && !(await ctx.db.query("SELECT 1 FROM candidacies WHERE id=$1 AND race_id=$2 AND state='listed'", [cand, raceId])).length)
-      return fail("bad_choice", "That candidate is not on this ballot", 422);
-  }
+  await validateChoices(ctx, p.contestId, p.choices);
+  const group = (await groupOf(ctx.db, p.contestId)) ?? fail("not_sealed", "This election has no group of voters", 409);
   // Fail early (before the slow encryption) when the member cannot vote.
   const pre = (await ctx.db.query<{ state: string; register_id: string | null }>("SELECT state, register_id FROM contests WHERE id=$1", [p.contestId]))[0];
   if (pre.state !== "open") return fail("not_open", pre.state === "closed" ? "Voting has closed" : "Voting is not open", 423);
 
   const ballotId = randomUUID();
+  // The platform makes this voter's membership proof (their identity is derived here). A member who registered an identity on their own
+  // device cannot vote this way: they vote from that device, anonymously.
+  const proof = await proveAssisted(ctx, p.memberId, p.contestId, ballotId, group);
+  const nullifier = await checkProof(p.contestId, ballotId, proof, group);
   const enc = await eg.encrypt(keys.manifest, keys.context, ballotId, p.choices);
   const code = enc.ballot_code.toLowerCase().padStart(64, "0");
-  const nullifier = ctx.keys.refHash(`nullifier:${p.contestId}`, p.memberId).slice(0, 32);
   const day = new Date(ctx.clock()); day.setUTCHours(0, 0, 0, 0);
   const unit = p.channel === "agent" && p.unit && UNIT.test(p.unit) ? p.unit : null;
 
@@ -253,13 +267,49 @@ export async function castEncrypted(ctx: Ctx, p: {
     const v = (await tx.query<{ revisions: number }>("SELECT revisions FROM voted WHERE contest_id=$1 AND member_id=$2 FOR UPDATE", [p.contestId, p.memberId]))[0];
     const rev = (v?.revisions ?? 0) + 1;
     await tx.query("UPDATE enc_ballots SET superseded=TRUE WHERE contest_id=$1 AND nullifier=$2 AND NOT superseded", [p.contestId, nullifier]);
-    await tx.query("INSERT INTO enc_ballots(id, contest_id, nullifier, ballot, ballot_code, channel, unit, cast_day) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-      [ballotId, p.contestId, nullifier, enc.ballot, code, p.channel, unit, day.toISOString()]);
+    await tx.query("INSERT INTO enc_ballots(id, contest_id, nullifier, ballot, ballot_code, channel, unit, cast_day, proof) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+      [ballotId, p.contestId, nullifier, enc.ballot, code, p.channel, unit, day.toISOString(), JSON.stringify(proof)]);
     await tx.query(
       `INSERT INTO voted(contest_id, member_id, revisions, last_day) VALUES ($1,$2,$3,$4)
        ON CONFLICT (contest_id, member_id) DO UPDATE SET revisions=EXCLUDED.revisions, last_day=EXCLUDED.last_day`, [p.contestId, p.memberId, rev, day.toISOString()]);
     await ctx.events.emit(tx, { type: "ballot.submitted", data: { contest_id: p.contestId, ballot_id: ballotId, ballot_code: code, channel: p.channel, revision: rev } });
     return rev;
+  });
+  return { receipts: [{ raceId: "all", receipt: code, revision }] };
+}
+
+/**
+ * ANONYMOUS casting, for a voter who made their identity on their own device. There is no login: the request carries the choices and a
+ * zero-knowledge proof that the sender is on this contest's group of voters, with a nullifier that is the same for the same person in this
+ * contest (so a second ballot replaces the first) and tells the platform nothing about who. The proof is bound to the ballot's id, so it
+ * cannot be reused for a different ballot, and is stored and published so anyone can check every counted ballot came from an eligible voter.
+ * Nothing links this ballot to a member: not the database, not the log, not the platform's own keys.
+ */
+export async function castAnonymous(ctx: Ctx, p: { contestId: string; ballotId: string; choices: Record<string, string | null>; proof: unknown }) {
+  const eg = egOf(ctx);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(p.ballotId))) return fail("bad_ballot", "The ballot id must be a UUID made on your device", 422);
+  const keys = (await keysOf(ctx.db, p.contestId)) ?? fail("not_found", "No election keys", 404);
+  if (!keys.sealed_at || !keys.manifest || !keys.context) return fail("not_open", "The election is not sealed", 423);
+  const group = (await groupOf(ctx.db, p.contestId)) ?? fail("not_sealed", "This election has no group of voters", 409);
+  const pre = (await ctx.db.query<{ state: string }>("SELECT state FROM contests WHERE id=$1", [p.contestId]))[0];
+  if (pre.state !== "open") return fail("not_open", pre.state === "closed" ? "Voting has closed" : "Voting is not open", 423);
+  // Check the (cheap) proof before doing anything expensive, so a stranger cannot make the platform encrypt for nothing.
+  const nullifier = await checkProof(p.contestId, p.ballotId, p.proof, group);
+  await validateChoices(ctx, p.contestId, p.choices);
+  const enc = await eg.encrypt(keys.manifest, keys.context, p.ballotId, p.choices);
+  const code = enc.ballot_code.toLowerCase().padStart(64, "0");
+  const day = new Date(ctx.clock()); day.setUTCHours(0, 0, 0, 0);
+  const revision = await ctx.commit(async (tx) => {
+    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`null:${p.contestId}:${nullifier}`]);
+    const c = (await tx.query<{ state: string }>("SELECT state FROM contests WHERE id=$1 FOR SHARE", [p.contestId]))[0];
+    if (c.state !== "open") return fail("not_open", c.state === "closed" ? "Voting has closed" : "Voting is not open", 423);
+    if ((await tx.query("SELECT 1 FROM enc_ballots WHERE id=$1", [p.ballotId])).length) return fail("bad_ballot", "That ballot id was already used", 409);
+    const prior = Number((await tx.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM enc_ballots WHERE contest_id=$1 AND nullifier=$2", [p.contestId, nullifier]))[0].n);
+    await tx.query("UPDATE enc_ballots SET superseded=TRUE WHERE contest_id=$1 AND nullifier=$2 AND NOT superseded", [p.contestId, nullifier]);
+    await tx.query("INSERT INTO enc_ballots(id, contest_id, nullifier, ballot, ballot_code, channel, unit, cast_day, proof) VALUES ($1,$2,$3,$4,$5,'web',NULL,$6,$7)",
+      [p.ballotId, p.contestId, nullifier, enc.ballot, code, day.toISOString(), JSON.stringify(p.proof)]);
+    await ctx.events.emit(tx, { type: "ballot.submitted", data: { contest_id: p.contestId, ballot_id: p.ballotId, ballot_code: code, channel: "web", revision: prior + 1 } });
+    return prior + 1;
   });
   return { receipts: [{ raceId: "all", receipt: code, revision }] };
 }
@@ -455,18 +505,25 @@ export async function publicRecord(ctx: Ctx, contestId: string) {
     guardians: gs.map((g) => ({ position: g.position, adminId: g.admin_id, keyPosted: !!g.public_key, verified: g.verified })),
     n: keys?.n ?? GUARDIANS, quorum: keys?.quorum ?? QUORUM,
     publicKeys: gs.every((g) => g.public_key) ? gs.map((g) => g.public_key) : [],
+    group: await publicGroup(ctx.db, contestId),
     jointPublicKey: keys?.joint_public_key ?? null, manifest: keys?.manifest ?? null, manifestHash: keys?.manifest_hash ?? null, context: keys?.context ?? null,
     ballots: { submitted: Number(total.n), superseded: Number(total.sup), counted: Number(total.n) - Number(total.sup) },
     tallies: tallies.map((t) => ({ set: t.tally_set, ballots: Number(t.ballots), shares: Number(shareCounts.find((c) => c.tally_set === t.tally_set)?.n ?? 0), tally: t.tally, opened: !!t.opened_at, counts: t.counts ? JSON.parse(t.counts) : null, plaintextTally: t.plaintext_tally, guardiansPresent: t.guardians_present ? JSON.parse(t.guardians_present) : null })),
   };
 }
 
+/** The contest's group of voters: public (only commitments, sorted), so anyone can rebuild the root and check it. */
+export async function publicGroup(db: Db, contestId: string) {
+  const g = await groupOf(db, contestId);
+  return g ? { depth: g.depth, root: g.root, size: g.size, commitments: g.commitments } : null;
+}
+
 /** Page through the encrypted ballots in ballot-code order (not arrival order, so position says nothing about timing). */
 export async function publicBallots(ctx: Ctx, contestId: string, after: string | undefined, limit = 100) {
   const lim = Math.min(Math.max(Math.trunc(limit) || 100, 1), 500);
-  const rows = await ctx.db.query<{ id: string; ballot_code: string; channel: string; unit: string | null; cast_day: string; superseded: boolean; ballot: string }>(
-    "SELECT id, ballot_code, channel, unit, cast_day, superseded, ballot FROM enc_ballots WHERE contest_id=$1 AND ($2::text IS NULL OR ballot_code > $2) ORDER BY ballot_code LIMIT $3", [contestId, after ?? null, lim]);
-  return { ballots: rows.map((r) => ({ id: r.id, ballotCode: r.ballot_code, channel: r.channel, unit: r.unit, castDay: new Date(r.cast_day).toISOString().slice(0, 10), superseded: r.superseded, ballot: r.ballot })), next: rows.length === lim ? rows[rows.length - 1].ballot_code : null };
+  const rows = await ctx.db.query<{ id: string; ballot_code: string; channel: string; unit: string | null; cast_day: string; superseded: boolean; ballot: string; proof: string | null }>(
+    "SELECT id, ballot_code, channel, unit, cast_day, superseded, ballot, proof FROM enc_ballots WHERE contest_id=$1 AND ($2::text IS NULL OR ballot_code > $2) ORDER BY ballot_code LIMIT $3", [contestId, after ?? null, lim]);
+  return { ballots: rows.map((r) => ({ id: r.id, ballotCode: r.ballot_code, channel: r.channel, unit: r.unit, castDay: new Date(r.cast_day).toISOString().slice(0, 10), superseded: r.superseded, ballot: r.ballot, proof: r.proof ? JSON.parse(r.proof) : null })), next: rows.length === lim ? rows[rows.length - 1].ballot_code : null };
 }
 
 /** Run the service's independent re-check over everything published (every ballot's proofs, and that the tally is exactly their sum). */
@@ -476,5 +533,25 @@ export async function verifyRecord(ctx: Ctx, contestId: string) {
   const t = (await ctx.db.query<{ tally: string }>("SELECT tally FROM election_tallies WHERE contest_id=$1 AND tally_set='all'", [contestId]))[0];
   if (!keys?.manifest || !keys.context || !t) return fail("nothing_to_verify", "There is no prepared tally to verify yet", 409);
   const rows = await ctx.db.query<{ ballot: string }>("SELECT ballot FROM enc_ballots WHERE contest_id=$1 AND NOT superseded ORDER BY ballot_code", [contestId]);
-  return eg.verify(keys.manifest, keys.context, rows.map((r) => r.ballot), t.tally);
+  const res = await eg.verify(keys.manifest, keys.context, rows.map((r) => r.ballot), t.tally);
+  // Eligibility: every ballot, counted or replaced, must carry a valid membership proof for THIS group, bound to its own id; and no two
+  // counted ballots may share a nullifier (that would be one person counted twice).
+  const group = await groupOf(ctx.db, contestId);
+  const problems = [...res.problems];
+  let checked = 0;
+  if (!group) problems.push("this contest has no group of voters");
+  else {
+    const all = await ctx.db.query<{ id: string; nullifier: string; proof: string | null; superseded: boolean }>("SELECT id, nullifier, proof, superseded FROM enc_ballots WHERE contest_id=$1 ORDER BY ballot_code", [contestId]);
+    const counted = new Set<string>();
+    for (const b of all) {
+      if (!b.proof) { problems.push(`ballot ${b.id} has no membership proof`); continue; }
+      try {
+        const n = await checkProof(contestId, b.id, JSON.parse(b.proof), group);
+        if (n !== b.nullifier) problems.push(`ballot ${b.id}: its nullifier does not match its proof`);
+        checked++;
+      } catch (e: any) { problems.push(`ballot ${b.id}: ${e?.message ?? "membership proof does not verify"}`); }
+      if (!b.superseded) { if (counted.has(b.nullifier)) problems.push(`two counted ballots share nullifier ${b.nullifier.slice(0, 12)}`); counted.add(b.nullifier); }
+    }
+  }
+  return { ok: problems.length === 0, problems, ballots: res.ballots, eligibilityChecked: checked };
 }

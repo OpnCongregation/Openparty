@@ -1,3 +1,10 @@
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Group } from "@semaphore-protocol/group";
+import { Identity } from "@semaphore-protocol/identity";
+import { generateProof } from "@semaphore-protocol/proof";
 import { approve, propose } from "../src/admin.js";
 import * as contests from "../src/contests.js";
 import { DAY } from "../src/context.js";
@@ -6,12 +13,23 @@ import * as sb from "../src/secret-ballot.js";
 import type { EgClient } from "../src/eg-client.js";
 import { joinAndActivate, makeAdmin, setup } from "./helpers.js";
 import { MockEg } from "./mock-eg.js";
+import { messageOf, scopeOf } from "../src/semaphore.js";
 
 export const PIN = "1234";
 
+/** Tests use a small tree (depth 4, up to 16 voters) so proofs are quick. The pinned artifacts are fetched once if they are not already here. */
+export const SEMAPHORE_DEPTH = 4;
+const ART = join(dirname(fileURLToPath(import.meta.url)), "..", "semaphore-artifacts");
+export function ensureArtifacts() {
+  if (existsSync(join(ART, "semaphore-4.wasm")) && existsSync(join(ART, "semaphore-4.zkey"))) return;
+  execFileSync("node", [join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "scripts", "fetch-semaphore-artifacts.mjs"), "4"], { stdio: "inherit" });
+}
+export const artifacts = { wasm: join(ART, "semaphore-4.wasm"), zkey: join(ART, "semaphore-4.zkey") };
+
 /** A contest with a notice, two offices, three candidates, eight members and the full cast of admins. Nothing is appointed or sealed yet. */
 export async function world(eg: EgClient = new MockEg(), n = 8) {
-  const s = await setup({ eg });
+  ensureArtifacts();
+  const s = await setup({ eg, semaphore: { depth: SEMAPHORE_DEPTH, artifactsDir: ART } });
   const { ctx } = s;
   const agent = await makeAdmin(ctx, "ward_agent", "W1");
   const sec = await makeAdmin(ctx, "secretary");
@@ -59,15 +77,36 @@ export async function world(eg: EgClient = new MockEg(), n = 8) {
     return priv;
   };
   const seal = () => approved("election.seal", { contestId: cid }, sec, [aud, tri]);
-  /** Freeze the register, record both receipts, wait for the vote date and open. */
-  const open = async () => {
+  /** Record the notice receipt, freeze the register and record its receipt. The group of voters is built from this register when the election is sealed. */
+  let frozen = false;
+  const freeze = async () => {
+    if (frozen) return;
     await contests.recordNoticeReceipt(ctx, cid, "INEC-N-001");
     const f = await contests.freezeRegister(ctx, cid);
     await contests.recordRegisterReceipt(ctx, f.registerId, "INEC-R-001");
+    frozen = true;
+  };
+  /** Wait for the vote date and open (freezing first if that has not been done). */
+  const open = async () => {
+    await freeze();
     s.advance(40);
     await contests.openContest(ctx, cid);
   };
-  const ready = async () => { await appoint(); const priv = await ceremony(); await seal(); await open(); return priv; };
+  const ready = async () => { await appoint(); const priv = await ceremony(); await freeze(); await seal(); await open(); return priv; };
+
+  /** A member makes an identity on their own device and registers its commitment. Returns the identity (the secret stays with the test, as it would on the phone). */
+  const deviceIdentity = async (m: { phone: string }) => {
+    const id = new Identity();
+    await election.registerIdentity(ctx, { phone: m.phone, pin: PIN, commitment: id.commitment.toString() });
+    return id;
+  };
+  /** An ANONYMOUS cast: a proof made from the public group, the choices, nothing that names the voter. */
+  const castAs = async (id: Identity, choices: Record<string, string | null>, opts: { ballotId?: string; contestId?: string } = {}) => {
+    const g = (await sb.publicGroup(ctx.db, cid))!;
+    const ballotId = opts.ballotId ?? crypto.randomUUID();
+    const proof = await generateProof(id, new Group(g.commitments.map(BigInt)), messageOf(ballotId), scopeOf(opts.contestId ?? cid), g.depth, artifacts);
+    return { ballotId, proof, result: await sb.castAnonymous(ctx, { contestId: cid, ballotId, choices, proof }) };
+  };
   const vote = (m: { phone: string }, choices: Record<string, string | null>) => election.webVote(ctx, { phone: m.phone, pin: PIN, contestId: cid, choices });
   const close = () => contests.closeContest(ctx, cid);
   const openTally = async (priv: Record<string, string>, who: any[], set: "all" | "agent" = "all") => {
@@ -77,5 +116,5 @@ export async function world(eg: EgClient = new MockEg(), n = 8) {
     for (const g of who) last = await sb.submitShares(ctx, g, cid, set, await w.eg.guardian.shares(priv[g.id], rec.manifest!, rec.context!, t, rec.publicKeys as string[]));
     return last;
   };
-  return { ...w, approved, appoint, ceremony, seal, open, ready, vote, close, openTally };
+  return { ...w, approved, appoint, ceremony, freeze, seal, open, ready, vote, close, openTally, deviceIdentity, castAs };
 }

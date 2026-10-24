@@ -100,6 +100,8 @@ describe("sealing the election", () => {
     const w = await world();
     await expect(sb.sealElection(w.ctx, { contestId: w.cid })).rejects.toMatchObject({ code: "no_keys" });
     await w.appoint(); await w.ceremony();
+    await expect(sb.sealElection(w.ctx, { contestId: w.cid })).rejects.toMatchObject({ code: "no_register" }); // the group of voters is built from the frozen register
+    await w.freeze();
     const id = await propose(w.ctx, w.sec, "election.seal", { contestId: w.cid });
     await approve(w.ctx, w.aud, id);
     expect((await sb.keysOf(w.ctx.db, w.cid))!.sealed_at).toBeNull();
@@ -120,13 +122,10 @@ describe("sealing the election", () => {
 
   it("refuses an empty ballot, and voting cannot open on an unsealed election while the service is configured", async () => {
     const w = await world();
-    await w.appoint(); await w.ceremony();
+    await w.appoint(); await w.ceremony(); await w.freeze();
     await w.ctx.db.query("UPDATE candidacies SET state='withdrawn'");
     expect(await code(sb.sealElection(w.ctx, { contestId: w.cid }))).toBe("empty_ballot");
     await w.ctx.db.query("UPDATE candidacies SET state='listed'");
-    await contests.recordNoticeReceipt(w.ctx, w.cid, "INEC-N-001");
-    const f = await contests.freezeRegister(w.ctx, w.cid);
-    await contests.recordRegisterReceipt(w.ctx, f.registerId, "INEC-R-001");
     w.advance(40);
     expect(await code(contests.openContest(w.ctx, w.cid))).toBe("not_sealed");
     process.env.ALLOW_PLAIN_BALLOT = "1";
@@ -142,7 +141,7 @@ describe("casting a secret ballot", () => {
     const r = await w.vote(m, { [w.raceA]: w.a0, [w.raceB]: null });
     expect(r.receipts[0].receipt).toMatch(/^[0-9a-f]{64}$/);
     const cols = (await w.ctx.db.query<any>("SELECT * FROM enc_ballots"))[0];
-    expect(Object.keys(cols).sort()).toEqual(["ballot", "ballot_code", "cast_day", "channel", "contest_id", "id", "nullifier", "superseded", "unit"]);
+    expect(Object.keys(cols).sort()).toEqual(["ballot", "ballot_code", "cast_day", "channel", "contest_id", "id", "nullifier", "proof", "superseded", "unit"]);
     const dump = JSON.stringify(await w.ctx.db.query("SELECT * FROM enc_ballots"));
     for (const secret of [m.memberId, m.phone, m.nin]) expect(dump).not.toContain(secret);
     expect(cols.nullifier).not.toBe(m.memberId);
@@ -177,7 +176,7 @@ describe("casting a secret ballot", () => {
 
   it("needs every office answered; only members on the register; only while open", async () => {
     const w = await world();
-    await w.appoint(); await w.ceremony(); await w.seal();
+    await w.appoint(); await w.ceremony(); await w.freeze(); await w.seal();
     expect(await code(w.vote(w.ms[3], { [w.raceA]: w.a0, [w.raceB]: null }))).toBe("not_open");
     await w.open();
     const late = await joinAndActivate(w.ctx, w.agent); // joins after the register was frozen
@@ -267,7 +266,7 @@ describe("counting: the guardians open the total, never a ballot", () => {
     expect(all.map((b) => b.ballotCode)).toEqual([...all.map((b) => b.ballotCode)].sort());
     expect(page2.next).toBeNull();
     expect(JSON.stringify(all)).not.toMatch(new RegExp(w.ms.map((m) => m.memberId).join("|")));
-    expect(Object.keys(all[0]).sort()).toEqual(["ballot", "ballotCode", "castDay", "channel", "id", "superseded", "unit"]);
+    expect(Object.keys(all[0]).sort()).toEqual(["ballot", "ballotCode", "castDay", "channel", "id", "proof", "superseded", "unit"]);
     expect((await sb.verifyRecord(w.ctx, w.cid).catch((e) => e)).code).toBe("nothing_to_verify"); // before the tally is prepared
     await sb.prepareTally(w.ctx, w.cid);
     expect((await sb.verifyRecord(w.ctx, w.cid)).ok).toBe(true);

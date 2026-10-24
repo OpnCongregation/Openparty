@@ -1,12 +1,14 @@
 "use client";
 import { useState } from "react";
 import { BallotPaper, initialPicks, toChoices, type BallotRace, type Picks } from "../ballot";
-import { call, errorText, useDemoKit } from "../lib";
+import { call, errorText, useConfig, useDemoKit } from "../lib";
+import { DeviceVote } from "../device-vote";
 
 interface View { contestId: string; name: string; open: boolean; eligible: boolean; state: string; secret: boolean; voted: { revisions: number } | null; races: BallotRace[] }
 
 export default function Vote() {
   const [kit] = useDemoKit();
+  const cfg = useConfig();
   const [phone, setPhone] = useState("");
   const [pin, setPin] = useState("");
   const [view, setView] = useState<View | null>(null);
@@ -38,15 +40,20 @@ export default function Vote() {
   return (
     <>
       <h1>Vote online</h1>
-      <p className="lead">Use your phone number and PIN. You can change your vote until voting closes; your last ballot counts.</p>
+      <p className="lead">You can change your vote until voting closes; your last ballot counts. Enter your phone number and PIN below; they are used to set up your device or, if you prefer, to vote directly.</p>
       {kit && <div className="banner demo">Demo members: {kit.members.slice(0, 6).map((m, i) => <button key={i} className="secondary" style={{ margin: "0 6px 4px 0", padding: "3px 9px" }} onClick={() => { setPhone(m.phone); setPin(m.pin); setView(null); setReceipts(null); }}>member {i + 1}</button>)}</div>}
+
+      <div className="grid2">
+        <div><label htmlFor="ph">Phone number</label><input id="ph" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+2348012345678" autoComplete="off" /></div>
+        <div><label htmlFor="pn">4-digit PIN</label><input id="pn" type="password" inputMode="numeric" maxLength={4} value={pin} onChange={(e) => setPin(e.target.value.replace(/D/g, ""))} autoComplete="off" /></div>
+      </div>
+
+      {cfg?.secretBallot && <DeviceVote phone={phone} pin={pin} preferred={kit?.contestId} />}
 
       {!receipts && (
         <>
-          <div className="grid2">
-            <div><label htmlFor="ph">Phone number</label><input id="ph" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+2348012345678" autoComplete="off" /></div>
-            <div><label htmlFor="pn">4-digit PIN</label><input id="pn" type="password" inputMode="numeric" maxLength={4} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))} autoComplete="off" /></div>
-          </div>
+          <h2>{cfg?.secretBallot ? "Or vote with your phone number and PIN" : "Vote"}</h2>
+          {cfg?.secretBallot && <p className="small muted">Your vote is still encrypted and secret, but the platform sees who you are while it prepares your ballot. If you set up an anonymous identity on a device, use that device instead.</p>}
           <p><button className="big" disabled={busy || !ready} onClick={load}>{view ? "Reload my ballot" : "Show my ballot"}</button></p>
         </>
       )}
@@ -55,7 +62,7 @@ export default function Vote() {
       {view && !view.open && <div className="msg">Voting is not open for “{view.name}” ({view.state}).</div>}
       {view && view.open && !view.eligible && <div className="msg err">You are not on the register for this contest, or your membership is no longer active, so you cannot vote. See your ward agent.</div>}
       {view && view.open && view.eligible && (
-        <>
+        <div data-ballot="pin">
           <h2>{view.name}</h2>
           {view.secret && <div className="banner demo"><strong>Secret ballot.</strong> Your vote is encrypted before it is stored, and the platform keeps no link between you and your ballot. For the same reason it cannot show you what you chose before.</div>}
           {view.voted && <div className="msg">You have already voted{view.voted.revisions > 1 ? ` (${view.voted.revisions} times)` : ""}. Voting again replaces your earlier ballot completely, so choose in every office.</div>}
@@ -67,7 +74,7 @@ export default function Vote() {
               {unanswered > 0 && <span className="muted small">Choose a candidate, or abstain, for {unanswered} more office{unanswered > 1 ? "s" : ""}.</span>}
             </p>
           )}
-        </>
+        </div>
       )}
 
       {receipts && (

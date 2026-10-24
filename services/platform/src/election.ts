@@ -8,6 +8,7 @@ import { collectFormFee } from "./finance.js";
 import { verifyPin } from "./members.js";
 import { t } from "./i18n.js";
 import { castEncrypted, encryptedResults, isSealed } from "./secret-ballot.js";
+import { modeOf, registerDeviceCommitment, resetToAssisted } from "./semaphore.js";
 
 /**
  * Phase 1 of voting: the ballot box. Races, candidates (public by design), vetting stamps, form fees, ballots and the tally.
@@ -120,6 +121,26 @@ export async function withdrawCandidate(ctx: Ctx, input: { phone: string; pin: s
   });
 }
 
+/**
+ * A member registers the PUBLIC commitment of an identity they made on their own device (the secret never leaves it). From then on they
+ * vote from that device, anonymously: no login at all, and nothing the platform holds can say which ballot is theirs. Do this before the
+ * election is sealed; the group of voters is fixed at sealing.
+ */
+export async function registerIdentity(ctx: Ctx, input: { phone: string; pin: string; commitment: string }) {
+  const m = await verifyPin(ctx, input.phone, input.pin);
+  await registerDeviceCommitment(ctx, m.id, input.commitment);
+  return { mode: "device" as const };
+}
+
+/** A ward agent, with the member present, returns them to the platform-derived identity (a lost or broken device). Before the group is built. */
+export async function resetIdentity(ctx: Ctx, agent: Admin, input: { memberId: string }) {
+  if (agent.role !== "ward_agent") return fail("forbidden", "Only ward agents can reset an identity", 403);
+  const row = (await ctx.db.query<{ ward: string | null }>("SELECT ward FROM members WHERE id=$1", [input.memberId]))[0];
+  if (!row) return fail("not_found", "No such member", 404);
+  if (row.ward && row.ward !== agent.ward) return fail("wrong_ward", "Agent can only reset members of their own ward", 403);
+  await resetToAssisted(ctx, input.memberId);
+}
+
 /** The member's own candidacies, with what is still owed. */
 export async function myCandidacies(ctx: Ctx, input: { phone: string; pin: string }) {
   const m = await verifyPin(ctx, input.phone, input.pin);
@@ -197,7 +218,8 @@ export async function ballotView(ctx: Ctx, memberId: string, contestId: string) 
     return { id: r.id, office: r.office, scope: r.scope, candidates: r.candidates.map(({ id, name, status }) => ({ id, name, status })),
       current: b ? { candidacyId: b.candidacy_id, revision: b.revision, receipt: b.receipt } : null };
   });
-  return { contestId, name: c.name, state: c.state, open: c.state === "open", eligible, secret, voted: voted ? { revisions: Number(voted.revisions) } : null, races };
+  const identity = secret ? await modeOf(ctx.db, memberId) : null;
+  return { contestId, name: c.name, state: c.state, open: c.state === "open", eligible, secret, identity, voted: voted ? { revisions: Number(voted.revisions) } : null, races };
 }
 
 export type Channel = "ussd" | "agent" | "web";

@@ -14,3 +14,4 @@ services/trustlog/data/
 *.log
 .pytest_cache/
 __pycache__/
+services/platform/semaphore-artifacts/

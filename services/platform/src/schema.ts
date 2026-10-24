@@ -192,6 +192,15 @@ CREATE TABLE IF NOT EXISTS enc_ballots (
 );
 CREATE INDEX IF NOT EXISTS enc_ballots_nullifier ON enc_ballots(contest_id, nullifier);
 CREATE INDEX IF NOT EXISTS enc_ballots_code ON enc_ballots(contest_id, ballot_code);
+-- Anonymous membership proofs (Semaphore). A member's identity commitment (device = made on their own device; assisted = derived by the
+-- platform for USSD and terminal voters), and each contest's fixed group of commitments.
+CREATE TABLE IF NOT EXISTS identity_commitments (
+  member_id TEXT PRIMARY KEY, commitment TEXT NOT NULL UNIQUE, mode TEXT NOT NULL CHECK (mode IN ('device','assisted')), registered_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE IF NOT EXISTS semaphore_groups (
+  contest_id TEXT PRIMARY KEY, depth INT NOT NULL, root TEXT NOT NULL, size INT NOT NULL, commitments TEXT NOT NULL, built_at TIMESTAMPTZ NOT NULL
+);
+ALTER TABLE enc_ballots ADD COLUMN IF NOT EXISTS proof TEXT;   -- the ballot's membership proof: public, anyone can verify it
 CREATE TABLE IF NOT EXISTS election_tallies (
   contest_id TEXT NOT NULL, tally_set TEXT NOT NULL, tally TEXT NOT NULL, ballots INT NOT NULL, prepared_at TIMESTAMPTZ NOT NULL,
   counts TEXT, plaintext_tally TEXT, opened_at TIMESTAMPTZ, guardians_present TEXT,

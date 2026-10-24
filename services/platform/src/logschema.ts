@@ -57,6 +57,7 @@ const EVENTS: Record<string, Record<string, Kind>> = {
   "guardian.verified": { contest_id: "uuid", admin_id: "uuid" },
   "ceremony.completed": { contest_id: "uuid", joint_key_hash: "hash" },
   "election.sealed": { contest_id: "uuid", manifest_hash: "hash", context_hash: "hash", races: "int" },
+  "group.built": { contest_id: "uuid", size: "int", depth: "int", root: "hash" },
   "ballot.submitted": { contest_id: "uuid", ballot_id: "uuid", ballot_code: "hash", channel: "token", revision: "int" },
   "tally.prepared": { contest_id: "uuid", tally_set: "token", ballots: "int", tally_hash: "hash" },
   "tally.share_posted": { contest_id: "uuid", tally_set: "token", admin_id: "uuid" },

@@ -4,6 +4,13 @@ All notable changes. This project uses [semantic versioning](https://semver.org/
 
 ## 0.2.0 (unreleased)
 
+### Anonymous membership proof (Semaphore)
+- Each member has one identity; the commitments of everyone on the frozen register form a fixed, sorted, public group, built when the election is sealed (the register must be frozen first).
+  A ballot carries a zero-knowledge proof of membership with a nullifier (same person, same contest: same nullifier, so a re-vote replaces the earlier ballot; unlinkable across contests), bound to the ballot id and the contest, stored and published.
+- **Device voters** make their identity in the browser (`/election/vote`), register only the commitment (PIN, before sealing) and then cast with **no login** (`POST /election/cast`). **Assisted voters** (USSD, terminal, web with a PIN) get a platform-derived identity and the same proofs.
+- The public check now verifies every ballot's membership proof and that no two counted ballots share a nullifier. New: `semaphore.ts`, tables `identity_commitments`/`semaphore_groups`, `enc_ballots.proof`, event `group.built`, agent identity reset, the proving files served by the platform and pinned by SHA-256 (`scripts/fetch-semaphore-artifacts.mjs`, baked into the Docker image), `SEMAPHORE_DEPTH` (default 20).
+- 15 new tests with REAL proofs; the whole flow also runs in Chrome (a voter makes an identity and casts anonymously). Packages `@semaphore-protocol/*` 4.14.5 pinned.
+
 ### Secret ballot (ElectionGuard) and guardians
 - New `services/electionguard` (Python 3.10, ElectionGuard reference library 1.4.0; internal only; no state, no guardian secrets): election description, key combination, encryption, encrypted tally, opening the total from any quorum's shares,
   independent re-check. `guardian_tool` for the guardians' own device. 11 tests incl. opening the tally with 2 of 5 guardians absent, a dropped ballot and a tampered ballot.

@@ -77,20 +77,24 @@ Never a single ballot, and never fewer than three.
 description is published and fixed; nobody can stand or be added after), open on the vote date, voting, close, **add up the encrypted ballots** (public maths), **three guardians post shares**,
 the total opens, results are published and the log carries turnout and per-candidate counts. With the service configured, opening is refused unless the election is sealed.
 
-**What is stored.** A ciphertext, an anonymous nullifier (so a second ballot from the same person replaces the first; the earlier one is marked superseded, not deleted), the channel, the polling unit
+**Who may vote, and how it stays anonymous (Semaphore).** Every member has one *identity*: a secret plus its public *commitment*. When the election is sealed, the commitments of everyone on the frozen register go into a fixed, sorted, public *group*. A ballot carries a zero-knowledge proof that its sender's identity is in that group, plus a *nullifier*: the same for the same person in this contest (so a second ballot replaces the first) and different in every other contest. The proof is bound to the ballot's own id and the contest, stored with the ballot and published, so anyone can check every counted ballot came from an eligible voter and nobody was counted twice.
+- **Device identity (recommended).** The voter's browser makes the identity; only the commitment is registered, once, with the member's PIN, before the election is sealed. Voting is then **anonymous: no login at all**, and nothing the platform holds can say which ballot is theirs.
+- **Assisted identity (USSD, polling-unit terminal, web with a PIN).** The platform derives the identity from its permanent reference key, makes the proof in memory and drops the secret. Whoever holds that key can re-derive it, so for these voters the link is protected by the operator's controls, not by mathematics (`docs/pending-tasks.md` A12).
+- **Policy.** The register is a snapshot: a member who resigns after the freeze stays eligible if they vote anonymously from a device (they cannot be told apart); platform-identified voters are refused.
+
+**What is stored.** A ciphertext, the nullifier (so a second ballot from the same person replaces the first; the earlier one is marked superseded, not deleted), the membership proof, the channel, the polling unit
 (polling-unit ballots only) and the **day**. No member id, no time of day, no serial number. Who has voted is kept in a separate table, with no link to any ballot. Ballots are published in
 ballot-code order, not arrival order. The platform cannot show a member what they chose before, only that they voted.
 
 **Paper at polling units.** Every ballot cast at a unit also leaves a paper copy. After the close the ward agent reports the paper count once per unit. The audit compares paper ballots with electronic
 ballots per unit, and, once the guardians have also opened the polling-unit total, the paper choices with the electronic ones. Any difference is shown, never hidden.
 
-**Endpoints.** Public: `GET /public/config`, `/public/election/:id/record`, `/ballots` (paged), `/audit`, `/verify`. Guardians (signed): `GET /guardian/ceremony/:id`, `POST /guardian/ceremony/:id/key|backups|verify`,
+**Endpoints.** Anonymous: `POST /election/cast` (no credentials; choices and proof). Member: `POST /election/identity` (register a device identity's commitment). Public: `GET /public/election/:id/group`, `GET /public/semaphore/:depth/semaphore.wasm|zkey` (the proving files). Public: `GET /public/config`, `/public/election/:id/record`, `/ballots` (paged), `/audit`, `/verify`. Guardians (signed): `GET /guardian/ceremony/:id`, `POST /guardian/ceremony/:id/key|backups|verify`,
 `POST /guardian/shares/:id/:set`. Admin: approved actions `guardians.appoint` and `election.seal`; `POST /admin/contests/:id/tally`. Agent (signed): `POST /agent/paper-count`.
 Screens: `/election/guardian`, `/election/audit`, and the new steps on `/election/desk`.
 
 **Trying it locally.** `docker compose up` starts the service (internal only). With `DEMO_MODE=1`, `EG_DEMO_GUARDIANS=1` the desk's *Demo* buttons run the five guardians' steps for you. Tests: `node scripts/test-electionguard.mjs`
 runs a whole election (five-guardian ceremony, three channels, a tally opened by three guardians, the independent check, the paper audit) on the real library.
 
-**Honest limits** (full list in `docs/pending-tasks.md`): the nullifier is a keyed hash, so someone holding the platform's secret key and the database could re-link a member to a ballot until the anonymous membership
-proof is built; every channel is encrypted **by the server** (the choice is in server memory once), which matters most for USSD voting, which the owner has made binding; all five guardians being electoral-committee members
+**Honest limits** (full list in `docs/pending-tasks.md`): anonymity is complete for device voters at the database level, but a device voter's *choices* still travel to the server, which encrypts them, so network metadata (IP, timing) can link a request to a person; assisted voters (USSD, terminal) are linkable by whoever holds the platform's reference key; every channel is encrypted **by the server** (the choice is in server memory once), which matters most for USSD voting, which the owner has made binding; all five guardians being electoral-committee members
 concentrates trust; the library is slow and old; and no independent audit has been done.

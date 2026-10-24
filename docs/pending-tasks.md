@@ -1,4 +1,4 @@
-# Pending tasks (as of 2026-10-24, after the secret-ballot build)
+# Pending tasks (as of 2026-10-24, after the anonymous membership proof)
 
 What is built and tested: ballot box, public candidates with vetting stamps and form fees, voting by USSD, web and ward agent, five guardians drawn from the electoral committee,
 a real ElectionGuard key ceremony, encrypted ballots, a tally opened by any three guardians, an independent re-check, a paper audit, and screens for all of it
@@ -11,13 +11,21 @@ a real ElectionGuard key ceremony, encrypted ballots, a tally opened by any thre
 | # | Task | Why |
 |---|---|---|
 | A1 | **BLOCKER. Independent cryptographic and security audit** of the whole ballot path (this code and the ElectionGuard integration) | Nobody independent has reviewed it |
-| A2 | **Anonymous membership proof (Semaphore).** Today the nullifier (what makes a re-vote replace the earlier ballot) is a keyed hash made by the platform, so someone holding the platform's secret key and the database can re-derive which ballot belongs to a member | The one remaining link between a voter and a ballot |
-| A3 | **Encrypt on the voter's own device** (browser, WebAssembly) with the Benaloh spoil check, for online voters. Today every channel is encrypted by the server, so the choice passes through server memory once | Removes the operator from the secrecy of online votes |
+| A2 | **Anonymous membership proof (Semaphore): BUILT for device voters** (a voter whose identity is made on their own phone casts with no login; no database, key or log the platform holds can link the ballot to them). **Not yet for USSD and terminal voters**: their identity is derived by the platform (see A12) | The one remaining cryptographic link between voter and ballot |
+| A3 | **Encrypt on the voter's own device** (browser, WebAssembly) with the Benaloh spoil check. The membership proof is now made in the browser, but the CHOICES still travel to the server, which encrypts them (ElectionGuard has no browser library). The request is unauthenticated, so the database cannot link it, but the network can (IP address, timing) | The choice is in server memory once; metadata links a request to a voter |
 | A4 | **USSD is binding (owner decision), so its secrecy rests on procedure.** Build: voting key in an HSM or Vault unlocked by the PIN, no logging of the choice anywhere on the path, witnessed key-use log, and ask the SMS/USSD gateway about retention | A feature phone cannot encrypt; the server must |
 | A5 | **BLOCKER. Legal opinion** on binding electronic and USSD voting for internal primaries (Electoral Act, INEC guidelines) | Owner chose binding; the law decides if it is allowed |
 | A6 | Verify each guardian's **decryption proofs** in the independent check, and have an outside party build a verifier from the ElectionGuard specification (the current check covers ballot proofs and that the tally is the sum) | Anyone should be able to check the whole count |
 | A7 | Guardian composition: all five are electoral-committee members (owner decision). Three colluding could decrypt individual ballots. Consider two independent guardians (tribunal, auditor, civil society) or a higher quorum | Concentration of trust |
-| A8 | Make the nullifier key live in Vault (HMAC) so a database thief who also has the app host cannot re-derive nullifiers | Defence in depth until A2 |
+| A8 | Derive the assisted voters' identities inside Vault or an HSM, not from the platform's reference key (see A12) | Defence in depth |
+| A11 | **Network metadata for anonymous casts**: IP address and timing can link a request to a person. Options: Tor or a relay, batching and random delay, a mixnet. Do not log IPs on `/election/cast` | Anonymity at the network layer |
+| A12 | **Assisted identities are derivable by the operator.** For USSD and polling-unit voters the secret is derived from the permanent reference key and the member id, used in memory and dropped, but anyone holding that key and the database can re-derive every assisted identity and nullifier and so link assisted ballots to members | Operator-trusted channels (and USSD is binding) |
+| A13 | **Revoking a voter during a contest.** A member who resigns or is erased after the register freeze stays eligible (a device voter, being anonymous, cannot be told apart; removing them means re-rooting the group, and every voter's proof then changes). Platform-identified voters are still refused | Policy: the register is a snapshot |
+| A14 | **Protect the identity on the device**: today it is in browser storage, readable by any script on that origin. Use passkeys or encrypt at rest with a key from the PIN; offer a printed QR backup; lost devices can only be reset by a ward agent BEFORE the election is sealed | A lost or copied identity |
+| A15 | The proof is bound to the ballot's id, not to its choices (TLS protects the choices in transit). Binding to the ciphertext needs A3 | Integrity of the request |
+| A16 | **Trust in the proving artifacts**: the Semaphore circuits and keys come from the project's trusted-setup ceremony and are pinned by SHA-256 here. Review the ceremony transcript; plan depths above 20 (up to 32) if a register could exceed one million | Provenance |
+| A17 | Verification cost: about 40 ms per ballot; a million ballots is about 11 hours on one core. Parallelise the public check | Speed |
+| A18 | Elections sealed before this change (in the local demo database) have no group of voters and cannot be voted in | Demo data only |
 | A9 | Remove timing and metadata links: shuffle published ballots (mixnet or batching), do not log IPs on voting routes, check gateway logs | Ballots are stored by day and published in code order, but IPs and gateway logs are outside our database |
 | A10 | Upgrade path: ElectionGuard 1.4.0 (2022, Python 3.10 only) to a maintained release or the C++ implementation; pin dependency hashes; SBOM | The library is old and logs secrets at INFO (we switch logging off) |
 

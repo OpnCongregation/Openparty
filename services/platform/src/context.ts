@@ -4,6 +4,7 @@ import type { KeyStore } from "./crypto.js";
 import type { IdAdapter, IdResult, Sms, TrustLog, Payments } from "./adapters.js";
 import type { Config } from "./framework/types.js";
 import type { EgClient } from "./eg-client.js";
+import type { SemaphoreConfig } from "./semaphore.js";
 import { sha256hex } from "./crypto.js";
 
 export interface Ctx {
@@ -26,6 +27,8 @@ export interface Ctx {
   commit<R>(fn: (tx: Db) => Promise<R>): Promise<R>;
   /** The ElectionGuard service (the secret ballot). Absent when it is not configured: elections then use the plain ballot box (docs/voting.md). */
   eg?: EgClient;
+  /** The anonymous membership proof (Semaphore): tree depth and where the proving artifacts are. Needed for the secret ballot. */
+  semaphore?: SemaphoreConfig;
   /** Injected so legal deadlines can be tested. */
   clock: () => Date;
   /** Test-only fault hook: called at named points where a crash would be interesting; a test makes it throw. Never set in production. */

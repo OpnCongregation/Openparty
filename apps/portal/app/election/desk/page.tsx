@@ -321,7 +321,7 @@ export default function Desk() {
           {shown("seal") && (
             <li className={cls("seal")}>
               <h4>Seal the election</h4>
-              <div className="small muted">Fixes the offices and candidates and builds the public election description every voter encrypts against. After this nobody can stand or be added. Approved like the guardians.</div>
+              <div className="small muted">Fixes the offices and candidates, builds the public election description every voter encrypts against, and fixes the group of voters for the anonymous membership proof (from the frozen register: voters who want to vote anonymously from their own device must register their identity BEFORE this). After this nobody can stand or be added. Approved like the guardians.</div>
               {sealed ? <div className="small">Sealed. The ballot is public and final.</div> : keyed && ["draft", "noticed"].includes(state) && <ApprovalsFor action="election.seal" />}
             </li>
           )}
