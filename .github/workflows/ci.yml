@@ -12,12 +12,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.22"
           cache-dependency-path: services/trustlog/go.mod
@@ -42,8 +42,8 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Images build
         run: |
-          export POSTGRES_PASSWORD=ci APPEND_TOKEN=ci MASTER_KEY_HEX=$(printf '0%.0s' {1..64}) PEPPER_HEX=$(printf '1%.0s' {1..64}) LOG_KEY=ci
+          export EG_TOKEN=ci-token-0123456789abcdef POSTGRES_PASSWORD=ci APPEND_TOKEN=ci MASTER_KEY_HEX=$(printf '0%.0s' {1..64}) PEPPER_HEX=$(printf '1%.0s' {1..64}) LOG_KEY=ci
           docker compose build
