@@ -12,7 +12,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -42,7 +42,7 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Images build
         run: |
           export POSTGRES_PASSWORD=ci APPEND_TOKEN=ci MASTER_KEY_HEX=$(printf '0%.0s' {1..64}) PEPPER_HEX=$(printf '1%.0s' {1..64}) LOG_KEY=ci
