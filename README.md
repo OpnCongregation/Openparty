@@ -1,6 +1,6 @@
 # OpenParty
 
-OpenParty is free software that helps a political party run itself honestly. It builds the party's own rules into the system, so no leader can quietly bend them.
+OpenParty is a free framework that helps a political party run itself honestly. It builds the party's own rules into the system, so no leader can quietly bend them.
 
 ## The problem
 
