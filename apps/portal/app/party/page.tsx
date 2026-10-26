@@ -318,7 +318,7 @@ export default function PartyPage() {
               <div style={{ position: "relative", zIndex: 1 }}>
                 <h3>Everything important leaves a public trace.</h3>
                 <p>Joins, payments, rule changes and notices go on a public, tamper-evident ledger that independent witnesses copy and sign. Anyone can check it in their browser; no personal data is on it.</p>
-                <p style={{ margin: "18px 0 0" }}><a className="pbtn" href="/">Verify the ledger yourself →</a></p>
+                <p style={{ margin: "18px 0 0" }}><a className="pbtn" href="/verify">Verify the ledger yourself →</a></p>
               </div>
               <div className="row2">
                 <div><div className="big">{head.size.toLocaleString()}</div><span>entries so far</span></div>

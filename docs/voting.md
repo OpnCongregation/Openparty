@@ -1,7 +1,7 @@
 # Voting
 
 Two layers. **The ballot box** (below, phase 1) enforces who may stand and vote and counts the votes. **The secret ballot** (section at the end) sits on top of it
-when the ElectionGuard service is configured, and is what a real contest must use. Guardians' runbook: `docs/guardians.md`. Everything still to do: `docs/pending-tasks.md`.
+when the ElectionGuard service is configured, and is what a real contest must use. Guardians' runbook: `docs/guardians.md`. Everything still to do: `docs/roadmap.md`.
 
 What is built, how it behaves, and what it is **not**. The secret-ballot design is in `docs/secret-ballot-recommendation.md`.
 
@@ -79,7 +79,7 @@ the total opens, results are published and the log carries turnout and per-candi
 
 **Who may vote, and how it stays anonymous (Semaphore).** Every member has one *identity*: a secret plus its public *commitment*. When the election is sealed, the commitments of everyone on the frozen register go into a fixed, sorted, public *group*. A ballot carries a zero-knowledge proof that its sender's identity is in that group, plus a *nullifier*: the same for the same person in this contest (so a second ballot replaces the first) and different in every other contest. The proof is bound to the ballot's own id and the contest, stored with the ballot and published, so anyone can check every counted ballot came from an eligible voter and nobody was counted twice.
 - **Device identity (recommended).** The voter's browser makes the identity; only the commitment is registered, once, with the member's PIN, before the election is sealed. Voting is then **anonymous: no login at all**, and nothing the platform holds can say which ballot is theirs.
-- **Assisted identity (USSD, polling-unit terminal, web with a PIN).** The platform derives the identity from its permanent reference key, makes the proof in memory and drops the secret. Whoever holds that key can re-derive it, so for these voters the link is protected by the operator's controls, not by mathematics (`docs/pending-tasks.md` A12).
+- **Assisted identity (USSD, polling-unit terminal, web with a PIN).** The platform derives the identity from its permanent reference key, makes the proof in memory and drops the secret. Whoever holds that key can re-derive it, so for these voters the link is protected by the operator's controls, not by mathematics (`docs/roadmap.md` A12).
 - **Policy.** The register is a snapshot: a member who resigns after the freeze stays eligible if they vote anonymously from a device (they cannot be told apart); platform-identified voters are refused.
 
 **What is stored.** A ciphertext, the nullifier (so a second ballot from the same person replaces the first; the earlier one is marked superseded, not deleted), the membership proof, the channel, the polling unit
@@ -96,5 +96,5 @@ Screens: `/election/guardian`, `/election/audit`, and the new steps on `/electio
 **Trying it locally.** `docker compose up` starts the service (internal only). With `DEMO_MODE=1`, `EG_DEMO_GUARDIANS=1` the desk's *Demo* buttons run the five guardians' steps for you. Tests: `node scripts/test-electionguard.mjs`
 runs a whole election (five-guardian ceremony, three channels, a tally opened by three guardians, the independent check, the paper audit) on the real library.
 
-**Honest limits** (full list in `docs/pending-tasks.md`): anonymity is complete for device voters at the database level, but a device voter's *choices* still travel to the server, which encrypts them, so network metadata (IP, timing) can link a request to a person; assisted voters (USSD, terminal) are linkable by whoever holds the platform's reference key; every channel is encrypted **by the server** (the choice is in server memory once), which matters most for USSD voting, which the owner has made binding; all five guardians being electoral-committee members
+**Honest limits** (full list in `docs/roadmap.md`): anonymity is complete for device voters at the database level, but a device voter's *choices* still travel to the server, which encrypts them, so network metadata (IP, timing) can link a request to a person; assisted voters (USSD, terminal) are linkable by whoever holds the platform's reference key; every channel is encrypted **by the server** (the choice is in server memory once), which matters most for USSD voting, which the owner has made binding; all five guardians being electoral-committee members
 concentrates trust; the library is slow and old; and no independent audit has been done.

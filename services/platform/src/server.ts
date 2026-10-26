@@ -15,6 +15,7 @@ import * as finance from "./finance.js";
 import * as participation from "./participation.js";
 import { registerUssd, type UssdOptions } from "./ussd-guard.js";
 import { registerFramework } from "./framework/api.js";
+import { CORE_PARTS } from "./framework/modules.js";
 
 export interface ServerOptions {
   ussd?: UssdOptions;
@@ -33,6 +34,9 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
     (req as any).rawBody = body as string;
     try { done(null, body ? JSON.parse(body as string) : {}); } catch (e: any) { e.statusCode = 400; done(e); }
   });
+
+  // Optional modules (parties/<party>/settings.yaml `modules:`). A module that is off registers no routes, so every one of them answers 404.
+  const mods = ctx.config.modules;
 
   app.addHook("onSend", async (_req, reply) => { reply.header("Access-Control-Allow-Origin", "*"); });
   // Browser pages (the portal) call this API directly: answer the preflight for JSON posts and signed admin requests.
@@ -65,6 +69,8 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
   // Server time, so a browser that signs admin requests can use the platform's clock (which a demo can move) instead of its own.
   // What this deployment can do, so the screens know whether to show the guardian steps.
   app.get("/public/config", async () => ({ secretBallot: !!ctx.eg, semaphoreDepth: ctx.semaphore?.depth ?? null, plainBallotAllowed: process.env.ALLOW_PLAIN_BALLOT === "1", demoGuardians: !!ctx.eg?.guardian }));
+  // Which optional modules this deployment has switched on, so the portal can hide the pages of the ones that are off. Core parts are always on.
+  app.get("/public/modules", async () => ({ modules: mods, core: CORE_PARTS }));
   app.get("/public/time", async () => ({ now: ctx.clock().toISOString() }));
   if (opts.demo) registerDemo(app, ctx, opts.demo);
 
@@ -77,7 +83,7 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
   });
 
   // USSD gateway webhook (Africa's Talking format): authenticated, validated and rate limited. See ussd-guard.ts.
-  registerUssd(app, ctx, opts.ussd ?? {});
+  if (mods.ussd) registerUssd(app, ctx, opts.ussd ?? {});
 
   // ---- Elections: public views, member self-service (phone + PIN, throttled per address and per member), admin and agent routes ----
   const voteLimit = new PgLimiter(ctx.db, "vote-web", 60, 60_000);
@@ -88,56 +94,62 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
     if (typeof b.phone !== "string" || !PHONE.test(b.phone) || typeof b.pin !== "string" || !/^\d{4}$/.test(b.pin)) return reply.code(400).send({ error: "bad_request", message: "Phone number and 4-digit PIN required" });
     return reply.send(await fn(b));
   };
-  app.get("/public/election/:contestId", async (req) => election.listElection(ctx, (req.params as any).contestId));
-  app.get("/public/election/:contestId/results", async (req) => election.results(ctx, (req.params as any).contestId));
-  app.post("/election/ballot", member((b) => election.webBallot(ctx, b)));
-  app.post("/election/vote", member((b) => election.webVote(ctx, b)));
-  app.post("/election/apply", member((b) => election.registerCandidate(ctx, b)));
-  app.post("/election/identity", member((b) => election.registerIdentity(ctx, b)));
-  // ANONYMOUS cast: no phone, no PIN. Only the choices and a zero-knowledge proof of membership. Throttled per address, not per person.
-  app.post("/election/cast", async (req: any, reply: any) => {
-    if (!(await voteLimit.take(req.ip))) return reply.code(429).header("Retry-After", 60).send({ error: "rate_limited" });
-    const b = req.body ?? {};
-    return reply.send(await sb.castAnonymous(ctx, { contestId: b.contestId, ballotId: b.ballotId, choices: b.choices, proof: b.proof }));
-  });
-  // The proving files, served from here so a voter's browser never depends on a third-party host. Immutable, and checked by hash at build.
-  app.get("/public/semaphore/:depth/:file", async (req: any, reply: any) => {
-    const cfg = ctx.semaphore;
-    if (!cfg || String(cfg.depth) !== req.params.depth || !["semaphore.wasm", "semaphore.zkey"].includes(req.params.file)) return reply.code(404).send({ error: "not_found" });
-    const f = join(cfg.artifactsDir, `semaphore-${cfg.depth}.${req.params.file.split(".")[1]}`);
-    if (!existsSync(f)) return reply.code(404).send({ error: "not_found" });
-    return reply.header("Cache-Control", "public, max-age=31536000, immutable").type(req.params.file.endsWith("wasm") ? "application/wasm" : "application/octet-stream").send(createReadStream(f));
-  });
-  app.get("/public/election/:contestId/group", async (req: any) => (await sb.publicGroup(ctx.db, req.params.contestId)) ?? { error: "no_group" });
-  app.post("/agent/reset-identity", guarded("member.activate", (a, req) => election.resetIdentity(ctx, a, req.body ?? {}).then(() => ({ ok: true }))));
-  app.post("/election/pay-form", member((b) => election.payForm(ctx, b)));
-  app.post("/election/withdraw", member((b) => election.withdrawCandidate(ctx, b).then(() => ({ ok: true }))));
-  app.post("/election/mine", member((b) => election.myCandidacies(ctx, b)));
-  // The secret ballot. Public record and audit (anyone), the guardians' own steps (signed, appointed guardians only), tally and paper counts.
-  app.get("/public/election/:contestId/record", async (req) => sb.publicRecord(ctx, (req.params as any).contestId));
-  app.get("/public/election/:contestId/ballots", async (req) => {
-    const q = (req.query ?? {}) as { after?: string; limit?: string };
-    return sb.publicBallots(ctx, (req.params as any).contestId, q.after, Number(q.limit ?? 100));
-  });
-  app.get("/public/election/:contestId/audit", async (req) => sb.paperAudit(ctx, (req.params as any).contestId));
-  app.get("/public/election/:contestId/verify", async (req) => sb.verifyRecord(ctx, (req.params as any).contestId));
-  app.get("/guardian/ceremony/:contestId", guarded("guardian.act", (a, req) => sb.ceremonyView(ctx, a, req.params.contestId)));
-  app.post("/guardian/ceremony/:contestId/key", guarded("guardian.act", (a, req) => sb.postKey(ctx, a, req.params.contestId, req.body?.public).then(() => ({ ok: true }))));
-  app.post("/guardian/ceremony/:contestId/backups", guarded("guardian.act", (a, req) => sb.postBackups(ctx, a, req.params.contestId, req.body?.backups).then(() => ({ ok: true }))));
-  app.post("/guardian/ceremony/:contestId/verify", guarded("guardian.act", (a, req) => sb.postVerification(ctx, a, req.params.contestId, req.body ?? {})));
-  app.post("/guardian/shares/:contestId/:set", guarded("guardian.act", (a, req) => sb.submitShares(ctx, a, req.params.contestId, req.params.set, req.body)));
-  app.post("/admin/contests/:contestId/tally", guarded("tally.prepare", async (_a, req) => {
-    const out = await sb.prepareTally(ctx, req.params.contestId, "all");
-    // the polling-unit total is prepared too when any ballots were cast at units, so the paper can be checked against it
-    const agentBallots = Number((await ctx.db.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM enc_ballots WHERE contest_id=$1 AND channel='agent' AND NOT superseded", [req.params.contestId]))[0].n);
-    const unitTotal = agentBallots > 0 ? await sb.prepareTally(ctx, req.params.contestId, "agent") : null;
-    return { all: out, units: unitTotal };
-  }));
-  app.post("/agent/paper-count", guarded("member.activate", (a, req) => sb.submitPaperCount(ctx, a, req.body ?? {}).then(() => ({ ok: true }))));
-  app.post("/agent/vote", guarded("member.activate", (a, req) => election.agentVote(ctx, a, req.body ?? {})));
-  app.post("/admin/races", guarded("race.manage", (a, req) => election.createRace(ctx, a, req.body ?? {})));
-  app.post("/admin/candidates/:id/stamp", guarded("candidate.stamp", (a, req) => election.stampCandidate(ctx, a, req.params.id, req.body?.verdict, req.body?.note).then(() => ({ ok: true }))));
-  app.get("/admin/election/:contestId", guarded("candidate.stamp", (_a, req) => election.listElection(ctx, req.params.contestId, { admin: true })));
+  // Voting: candidates, stamps, form fees, ballots and results.
+  if (mods.voting) {
+    app.get("/public/election/:contestId", async (req) => election.listElection(ctx, (req.params as any).contestId));
+    app.get("/public/election/:contestId/results", async (req) => election.results(ctx, (req.params as any).contestId));
+    app.post("/election/ballot", member((b) => election.webBallot(ctx, b)));
+    app.post("/election/vote", member((b) => election.webVote(ctx, b)));
+    app.post("/election/apply", member((b) => election.registerCandidate(ctx, b)));
+    app.post("/election/pay-form", member((b) => election.payForm(ctx, b)));
+    app.post("/election/withdraw", member((b) => election.withdrawCandidate(ctx, b).then(() => ({ ok: true }))));
+    app.post("/election/mine", member((b) => election.myCandidacies(ctx, b)));
+    app.post("/agent/vote", guarded("member.activate", (a, req) => election.agentVote(ctx, a, req.body ?? {})));
+    app.post("/admin/races", guarded("race.manage", (a, req) => election.createRace(ctx, a, req.body ?? {})));
+    app.post("/admin/candidates/:id/stamp", guarded("candidate.stamp", (a, req) => election.stampCandidate(ctx, a, req.params.id, req.body?.verdict, req.body?.note).then(() => ({ ok: true }))));
+    app.get("/admin/election/:contestId", guarded("candidate.stamp", (_a, req) => election.listElection(ctx, req.params.contestId, { admin: true })));
+  }
+  // Secret ballot (needs voting): anonymous membership proof, public record and audit, guardians, tally and paper counts.
+  if (mods.secret_ballot) {
+    app.post("/election/identity", member((b) => election.registerIdentity(ctx, b)));
+    // ANONYMOUS cast: no phone, no PIN. Only the choices and a zero-knowledge proof of membership. Throttled per address, not per person.
+    app.post("/election/cast", async (req: any, reply: any) => {
+      if (!(await voteLimit.take(req.ip))) return reply.code(429).header("Retry-After", 60).send({ error: "rate_limited" });
+      const b = req.body ?? {};
+      return reply.send(await sb.castAnonymous(ctx, { contestId: b.contestId, ballotId: b.ballotId, choices: b.choices, proof: b.proof }));
+    });
+    // The proving files, served from here so a voter's browser never depends on a third-party host. Immutable, and checked by hash at build.
+    app.get("/public/semaphore/:depth/:file", async (req: any, reply: any) => {
+      const cfg = ctx.semaphore;
+      if (!cfg || String(cfg.depth) !== req.params.depth || !["semaphore.wasm", "semaphore.zkey"].includes(req.params.file)) return reply.code(404).send({ error: "not_found" });
+      const f = join(cfg.artifactsDir, `semaphore-${cfg.depth}.${req.params.file.split(".")[1]}`);
+      if (!existsSync(f)) return reply.code(404).send({ error: "not_found" });
+      return reply.header("Cache-Control", "public, max-age=31536000, immutable").type(req.params.file.endsWith("wasm") ? "application/wasm" : "application/octet-stream").send(createReadStream(f));
+    });
+    app.get("/public/election/:contestId/group", async (req: any) => (await sb.publicGroup(ctx.db, req.params.contestId)) ?? { error: "no_group" });
+    app.post("/agent/reset-identity", guarded("member.activate", (a, req) => election.resetIdentity(ctx, a, req.body ?? {}).then(() => ({ ok: true }))));
+    // The secret ballot. Public record and audit (anyone), the guardians' own steps (signed, appointed guardians only), tally and paper counts.
+    app.get("/public/election/:contestId/record", async (req) => sb.publicRecord(ctx, (req.params as any).contestId));
+    app.get("/public/election/:contestId/ballots", async (req) => {
+      const q = (req.query ?? {}) as { after?: string; limit?: string };
+      return sb.publicBallots(ctx, (req.params as any).contestId, q.after, Number(q.limit ?? 100));
+    });
+    app.get("/public/election/:contestId/audit", async (req) => sb.paperAudit(ctx, (req.params as any).contestId));
+    app.get("/public/election/:contestId/verify", async (req) => sb.verifyRecord(ctx, (req.params as any).contestId));
+    app.get("/guardian/ceremony/:contestId", guarded("guardian.act", (a, req) => sb.ceremonyView(ctx, a, req.params.contestId)));
+    app.post("/guardian/ceremony/:contestId/key", guarded("guardian.act", (a, req) => sb.postKey(ctx, a, req.params.contestId, req.body?.public).then(() => ({ ok: true }))));
+    app.post("/guardian/ceremony/:contestId/backups", guarded("guardian.act", (a, req) => sb.postBackups(ctx, a, req.params.contestId, req.body?.backups).then(() => ({ ok: true }))));
+    app.post("/guardian/ceremony/:contestId/verify", guarded("guardian.act", (a, req) => sb.postVerification(ctx, a, req.params.contestId, req.body ?? {})));
+    app.post("/guardian/shares/:contestId/:set", guarded("guardian.act", (a, req) => sb.submitShares(ctx, a, req.params.contestId, req.params.set, req.body)));
+    app.post("/admin/contests/:contestId/tally", guarded("tally.prepare", async (_a, req) => {
+      const out = await sb.prepareTally(ctx, req.params.contestId, "all");
+      // the polling-unit total is prepared too when any ballots were cast at units, so the paper can be checked against it
+      const agentBallots = Number((await ctx.db.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM enc_ballots WHERE contest_id=$1 AND channel='agent' AND NOT superseded", [req.params.contestId]))[0].n);
+      const unitTotal = agentBallots > 0 ? await sb.prepareTally(ctx, req.params.contestId, "agent") : null;
+      return { all: out, units: unitTotal };
+    }));
+    app.post("/agent/paper-count", guarded("member.activate", (a, req) => sb.submitPaperCount(ctx, a, req.body ?? {}).then(() => ({ ok: true }))));
+  }
 
   // Ward agent
   app.post("/agent/activate", guarded("member.activate", (a, req) => members.activateMember(ctx, a, req.body).then(() => ({ ok: true }))));
@@ -154,13 +166,19 @@ export function buildServer(ctx: Ctx, opts: ServerOptions = {}) {
   app.get("/admin/registers/:id/export", guarded("register.read", (_a, req) => contests.exportRegister(ctx, req.params.id)));
   app.post("/admin/approvals", guarded("approval.propose", async (a, req) => ({ id: await admin.propose(ctx, a, req.body.action, req.body.payload) })));
   app.post("/admin/approvals/:id/approve", guarded("approval.approve", (a, req) => admin.approve(ctx, a, req.params.id)));
-  app.post("/admin/gifts", guarded("gift.record", (_a, req) => finance.recordGift(ctx, req.body.payment, req.body.donor)));
-  app.get("/admin/finance/donors", guarded("finance.report", () => finance.donorReport(ctx)));
-  app.post("/admin/finance/retry-payments", guarded("finance.retry", () => finance.retryUnrecorded(ctx)));
-  app.get("/admin/finance/reconcile", guarded("finance.report", () => finance.reconcile(ctx)));
+  // Finance: gifts, donor report, payment retry and reconciliation.
+  if (mods.finance) {
+    app.post("/admin/gifts", guarded("gift.record", (_a, req) => finance.recordGift(ctx, req.body.payment, req.body.donor)));
+    app.get("/admin/finance/donors", guarded("finance.report", () => finance.donorReport(ctx)));
+    app.post("/admin/finance/retry-payments", guarded("finance.retry", () => finance.retryUnrecorded(ctx)));
+    app.get("/admin/finance/reconcile", guarded("finance.report", () => finance.reconcile(ctx)));
+  }
 
   // Public
-  app.get("/public/proposals/:id", async (req) => participation.proposalStatus(ctx, (req.params as any).id));
+  // Petitions: the public status of a proposal.
+  if (mods.petitions) {
+    app.get("/public/proposals/:id", async (req) => participation.proposalStatus(ctx, (req.params as any).id));
+  }
   app.get("/public/contests", async () => ctx.db.query("SELECT id,name,primary_type,mode,vote_date,state,notice_at,rules_hash FROM contests ORDER BY vote_date"));
   app.get("/public/registers/:contestId", async (req) =>
     ctx.db.query("SELECT id,contest_id,frozen_at,fingerprint,member_count,(inec_receipt IS NOT NULL) AS filed FROM registers WHERE contest_id=$1", [(req.params as any).contestId]));

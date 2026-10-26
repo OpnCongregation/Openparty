@@ -41,7 +41,7 @@ A pack rule is a bound on a named parameter:
 | `has` | a list must contain at least these items |
 
 `framework/compliance.ts` produces an honest self-assessment: for each pack rule, is it **enforced** by code that reads its parameter,
-**partly** enforced, only **declared** (waiting for a module that is not built), or **needs a human** (for example whether a party name has
+**partly** enforced, only **declared** (waiting for a feature that is not built), or **needs a human** (for example whether a party name has
 ethnic meaning). It is a self-assessment, not a certification.
 
 ## Services
@@ -98,6 +98,6 @@ one-way hash for "one person, one membership". Adapters must pass the public con
 
 ## What is not built
 
-Voting and tally (ElectionGuard, Semaphore), ratings, tribunal, ombudsman, screening, learning, covenant tracker, election-day operations,
+Voting, the secret ballot (ElectionGuard, Semaphore) and the tally are built; see [voting.md](voting.md) and [roadmap.md](roadmap.md) for their limits. Not built: ratings, tribunal, ombudsman, screening, learning, covenant tracker, election-day operations,
 the Flutter and Kotlin apps, an admin web console, register export as PDF, and translations other than English. See the floor
 statuses in `floor/floor-v1.yaml` and the pack statuses on the Framework page.

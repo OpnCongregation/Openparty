@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { canonical, sha256hex } from "../crypto.js";
+import { resolveModules } from "./modules.js";
 import type { Floor, FloorRule, LawPack, Op, PackRule, PartyFile, RuleExpr, Value } from "./types.js";
 
 export class PackError extends Error {}
@@ -124,6 +125,7 @@ export function loadParty(path = join(findRoot(), "parties", "ddpn", "settings.y
     pack: { id: str(doc.pack?.id, "party pack id"), version: str(String(doc.pack?.version), "party pack version") },
     settings: doc.settings ?? {},
     profile: doc.profile ?? {},
+    modules: resolveModules(doc.modules),
     hash: sha256hex(canonical(doc)),
   };
 }

@@ -1,3 +1,4 @@
+import type { Modules } from "./modules.js";
 export type Value = string | number | boolean | null | Value[];
 
 export type Op = ">=" | "<=" | "==" | "in" | "has";
@@ -69,6 +70,8 @@ export interface PartyFile {
   pack: { id: string; version: string };
   settings: Record<string, Value>;
   profile: Record<string, any>;
+  /** Optional modules, on or off (modules.ts). */
+  modules: Modules;
   hash: string;
 }
 
@@ -86,6 +89,8 @@ export interface Config {
   party: PartyFile;
   /** Pack defaults overlaid with the party's settings. */
   params: Record<string, Value>;
+  /** Which optional modules are on (the party file's `modules:` section). */
+  modules: Modules;
   violations: Violation[];
   fingerprint: string;
   get<T = Value>(key: string): T;

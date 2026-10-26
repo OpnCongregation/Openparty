@@ -2,7 +2,18 @@
 
 All notable changes. This project uses [semantic versioning](https://semver.org/) once it reaches 1.0.
 
-## 0.2.0 (unreleased)
+## 1.0.0 (2026-10-26)
+
+### Highlights
+- **Module system.** Finance, petitions, USSD, voting and secret ballot are switched on or off in the party settings (`modules:`). Membership, the trust log, approvals and law pack checks are core. A module that is off has no routes (404), no background jobs and no portal pages. New `GET /public/modules`. See [docs/modules.md](docs/modules.md).
+- **New README** for non-technical readers. Developer set-up, ports, environment settings and test commands moved to [docs/developers.md](docs/developers.md).
+- **New portal UI.** A home page with a card for each module that is on, a shared layout with a sidebar and a mobile menu, a "Demo data" banner in demo mode, one design system (light and dark), a phone-style USSD simulator and a guided demo tour (`/tour`). The log verifier moved from `/` to `/verify`.
+- **Roadmap.** `docs/pending-tasks.md` became [docs/roadmap.md](docs/roadmap.md): must do before real use, planned improvements, decisions made.
+- Versions: every package is now 1.0.0. 1.0.0 is a feature-complete reference release, not a claim of production readiness: it has no independent security audit and the Nigeria law pack has not been reviewed by a lawyer. See the status box in the README.
+
+### Optional modules
+- New `modules:` section in `parties/<party>/settings.yaml` with on/off flags for `finance`, `petitions`, `ussd`, `voting` and `secret_ballot`. Membership, the trust log, approvals and the law pack checks are core and cannot be listed. A module not listed is off; `secret_ballot` needs `voting`; a typo, an unknown or core name, or a non-boolean stops the platform at start.
+- A module that is off registers no routes (they answer 404) and starts no background jobs (`jobs.ts`). New `GET /public/modules`; the portal hides the pages of modules that are off. DDPN turns all five on. Plain-language guide: [docs/modules.md](docs/modules.md).
 
 ### Dependency security (GitHub reported 114 alerts)
 - `npm audit`: **24 vulnerable packages to 0.** Same-major bumps: fastify 5.2.1 to 5.12.7 (content-type validation bypass, spoofable host and protocol headers, memory DoS), yaml 2.6.1 to 2.9.1,
@@ -26,7 +37,7 @@ All notable changes. This project uses [semantic versioning](https://semver.org/
   `election.seal` (approved), encrypted casting with **no member id** (anonymous nullifier, day only, supersede on re-vote, separate turnout record), encrypted tally, shares from any 3 guardians, public record and ballots, independent verify,
   paper counts and the paper-versus-electronic audit. With `EG_URL` set, voting cannot open on an unsealed election.
 - Screens: Guardians (their own steps and commands), Audit (record, independent check, paper audit and the agent's paper-count form), and the new desk steps (appoint, ceremony, seal, count). Demo shortcuts for the guardians (`EG_DEMO_GUARDIANS`).
-- Tribunal gains `approval.approve` (an independent check). Form-fee cap hook removed (owner: no cap). Docs: `docs/guardians.md`, `docs/pending-tasks.md`.
+- Tribunal gains `approval.approve` (an independent check). Form-fee cap hook removed (owner: no cap). Docs: `docs/guardians.md`, `docs/roadmap.md`.
 - The ElectionGuard library logs raw cryptographic values at INFO: the service and the guardian tool switch logging off before importing it.
 
 ### Voting, phase 1: the ballot box (not a secret ballot; see docs/voting.md)

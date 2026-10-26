@@ -1,9 +1,9 @@
 /* The election screens: a plain, high-contrast ballot-paper look that works on a phone and in a polling unit. */
-.el { max-width: 920px; margin: 0 auto; }
+.el { max-width: none; margin: 0; }
 .el-sub { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 0 20px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
 .el-sub a { padding: 8px 14px; border-radius: 7px; text-decoration: none; color: var(--fg); font-size: .95rem; }
 .el-sub a:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.el-sub a.on { background: var(--accent); color: #fff; }
+.el-sub a.on { background: var(--btn); color: var(--on-btn); }
 .el h1 { font-size: 1.55rem; letter-spacing: -0.01em; }
 .el .banner { border-left: 4px solid #b7791f; background: color-mix(in srgb, #b7791f 12%, var(--card)); padding: 10px 14px; border-radius: 6px; margin: 0 0 18px; font-size: .92rem; }
 .el .banner.demo { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
@@ -39,12 +39,12 @@
 .el .steps { counter-reset: s; list-style: none; padding: 0; margin: 0; }
 .el .steps > li { counter-increment: s; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px 12px 52px; margin: 10px 0; position: relative; background: var(--card); }
 .el .steps > li::before { content: counter(s); position: absolute; left: 14px; top: 12px; width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-weight: 700; font-size: .85rem; }
-.el .steps > li.done::before { content: "✓"; border-color: var(--accent); background: var(--accent); color: #fff; }
+.el .steps > li.done::before { content: "✓"; border-color: var(--accent); background: var(--btn); color: var(--on-btn); }
 .el .steps > li.now { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .el .steps h4 { margin: 0 0 4px; font-size: 1rem; }
 .el .who { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
 .el .who button { background: transparent; color: var(--fg); border: 1px solid var(--line); font-size: .85rem; padding: 5px 10px; }
-.el .who button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.el .who button.on { background: var(--btn); color: var(--on-btn); border-color: var(--accent); }
 .el pre.log { max-height: 220px; overflow: auto; background: #0e100e; color: #b6f5c9; padding: 10px 12px; border-radius: 8px; font-size: 12px; }
 .el .unit { border: 3px solid var(--fg); border-radius: 14px; padding: 18px; background: var(--card); }
 .el .unit h2 { margin-top: 0; }

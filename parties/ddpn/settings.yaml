@@ -32,6 +32,15 @@ settings:
   org.women_target_pct: 35                  # sample; a party choice, shown on the officer dashboard
   org.chairman_secretary_different_zone: true
 
+# Optional modules. Membership, the trust log, approvals and the law pack checks are core and are always on.
+# A module left out of this list is OFF. secret_ballot needs voting. See docs/modules.md.
+modules:
+  finance: true       # gifts, donor report, payment retry and reconciliation
+  petitions: true     # public status of member proposals
+  ussd: true          # the feature-phone gateway
+  voting: true        # candidates, stamps, form fees, ballots and results
+  secret_ballot: true # anonymous proof of membership, guardians, tally, public audit (needs voting)
+
 profile:
   name: Digital Democratic Party of Nigeria
   acronym: DDPN

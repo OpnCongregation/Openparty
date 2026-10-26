@@ -1,5 +1,6 @@
 import { canonical, sha256hex } from "../crypto.js";
 import { loadFloor, loadPack, loadParty, PackError } from "./load.js";
+import { resolveModules } from "./modules.js";
 import { effectiveParams, validateConfig } from "./resolve.js";
 import type { Config, Floor, LawPack, PartyFile, Value } from "./types.js";
 
@@ -25,12 +26,13 @@ export function fingerprintOf(floor: Floor, pack: LawPack, party: PartyFile): st
 export function buildConfig(floor: Floor, pack: LawPack, party: PartyFile, opts: { lenient?: boolean } = {}): Config {
   if (party.pack.id !== pack.id)
     throw new PackError(`party ${party.party} is written for pack ${party.pack.id}, not ${pack.id}`);
+  const modules = resolveModules(party.modules); // refuses a combination that cannot run, e.g. secret_ballot without voting
   const violations = validateConfig(pack, party.settings);
   if (violations.length && !opts.lenient) throw new ConfigError(violations);
   const params = effectiveParams(pack, party.settings);
   if (!("party.name" in party.settings) && typeof party.profile?.name === "string") params["party.name"] = party.profile.name;
   return {
-    floor, pack, party, params, violations,
+    floor, pack, party, params, violations, modules,
     fingerprint: fingerprintOf(floor, pack, party),
     get: <T = Value>(key: string) => {
       if (!(key in params)) throw new Error(`unknown configuration key: ${key}`);
