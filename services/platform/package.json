@@ -15,17 +15,17 @@
     "validate:packs": "tsx src/framework/cli.ts"
   },
   "dependencies": {
-    "@electric-sql/pglite": "0.2.17",
+    "@electric-sql/pglite": "0.5.11",
     "@semaphore-protocol/group": "4.14.5",
     "@semaphore-protocol/identity": "4.14.5",
     "@semaphore-protocol/proof": "4.14.5",
     "fastify": "5.12.7",
-    "pg": "8.13.1",
+    "pg": "8.23.1",
     "yaml": "2.9.1"
   },
   "devDependencies": {
     "@types/node": "22.10.5",
-    "@types/pg": "8.11.10",
+    "@types/pg": "8.23.1",
     "tsx": "4.23.15",
     "typescript": "5.7.3",
     "vitest": "4.1.12"
