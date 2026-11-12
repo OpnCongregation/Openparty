@@ -2,7 +2,7 @@
 # The package metadata also pulls in GUI and database libraries (Eel, pymongo, gevent...) that need a C compiler and that this
 # service never uses, so the cryptographic core is installed without its declared dependencies and the few it really needs are
 # pinned in requirements.txt.
-FROM python:3.10-slim
+FROM python:3.15-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /srv
